@@ -1674,7 +1674,11 @@ class GuildMusicState:
         self.force_skip_loop: bool = False
         self.lock = asyncio.Lock()
         self.is_paused: bool = False
-        self.is_playing: bool = False
+        # ⚠️ NO agregar acá "self.is_playing = False": ya existe el método
+        # is_playing() de abajo con el MISMO nombre. Un atributo de instancia
+        # con el mismo nombre que un método de la clase lo tapa (shadowing):
+        # "state.is_playing" deja de ser el método y pasa a ser ese bool,
+        # así que "state.is_playing()" explota con 'bool' object is not callable.
 
     def is_playing(self) -> bool:
         return bool(self.voice_client and (self.voice_client.is_playing() or self.voice_client.is_paused()))
@@ -1726,7 +1730,6 @@ async def _play_next_locked(guild_id: int) -> None:
         state.current = None
         state.play_started_at = None
         state.force_skip_loop = False
-        state.is_playing = False  # ✅ ACTUALIZAR
         state.is_paused = False   # ✅ ACTUALIZAR
         return
 
@@ -1773,7 +1776,6 @@ async def _play_next_locked(guild_id: int) -> None:
 
     state.voice_client.play(source, after=_after_playing)
     state.play_started_at = time.time()
-    state.is_playing = True  # ✅ ACTUALIZAR
     state.is_paused = False  # ✅ ACTUALIZAR
 
     if state.text_channel:
@@ -2221,7 +2223,6 @@ async def stop(interaction: discord.Interaction):
         state.voice_client.stop()
     state.queue.clear()
     state.current = None
-    state.is_playing = False
     state.is_paused = False  # ✅ RESETEAR PAUSA
     state.force_skip_loop = False
     
@@ -2461,7 +2462,6 @@ async def disconnect(interaction: discord.Interaction):
         state.voice_client.stop()
     state.queue.clear()
     state.current = None
-    state.is_playing = False
     state.is_paused = False  # ✅ RESETEAR PAUSA
     
     try:
