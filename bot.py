@@ -563,6 +563,83 @@ def unmute_user(guild_id: int, user_id: int) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────
+#  SISTEMA DE WARNS (advertencias persistentes)
+# ──────────────────────────────────────────────────────────────
+
+WARNS_PATH = "warns.json"
+
+
+def load_warns() -> dict:
+    """Carga advertencias desde Supabase o archivo local"""
+    if supabase:
+        try:
+            result = supabase.table("warns").select("*").eq("guild_id", "all").execute()
+            if result.data and len(result.data) > 0:
+                return result.data[0].get("data", {})
+        except Exception as e:
+            print(f"❌ Error cargando warns de Supabase: {e}")
+
+    with config_lock:
+        if not os.path.exists(WARNS_PATH):
+            return {}
+        with open(WARNS_PATH, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return {}
+
+
+def save_warns(data: dict) -> None:
+    """Guarda advertencias en Supabase y local"""
+    if supabase:
+        try:
+            supabase.table("warns").upsert({
+                "guild_id": "all",
+                "data": data
+            }).execute()
+        except Exception as e:
+            print(f"❌ Error guardando warns en Supabase: {e}")
+
+    with config_lock:
+        tmp_path = WARNS_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, WARNS_PATH)
+
+
+def add_warn(guild_id: int, user_id: int, reason: str, moderator: str) -> int:
+    """Añade una advertencia y devuelve el total de advertencias del usuario."""
+    data = load_warns()
+    key = f"{guild_id}_{user_id}"
+    entries = data.get(key, [])
+    entries.append({
+        "reason": reason,
+        "moderator": moderator,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    })
+    data[key] = entries
+    save_warns(data)
+    return len(entries)
+
+
+def get_warns(guild_id: int, user_id: int) -> list[dict]:
+    data = load_warns()
+    key = f"{guild_id}_{user_id}"
+    return data.get(key, [])
+
+
+def clear_warns(guild_id: int, user_id: int) -> int:
+    """Elimina todas las advertencias de un usuario, devuelve cuántas se borraron."""
+    data = load_warns()
+    key = f"{guild_id}_{user_id}"
+    count = len(data.get(key, []))
+    if key in data:
+        del data[key]
+        save_warns(data)
+    return count
+
+
+# ──────────────────────────────────────────────────────────────
 #  COLORES / HELPERS
 # ──────────────────────────────────────────────────────────────
 
@@ -4293,7 +4370,8 @@ class PollView(discord.ui.View):
         total = self.poll_data["total_votes"]
         
         # Título y descripción
-        title = f"📊 {self.poll_data['question']}"
+        finished = self.poll_data.get("finished", False)
+        title = f"🔒 {self.poll_data['question']} (Finalizada)" if finished else f"📊 {self.poll_data['question']}"
         description = f"**Total de votos:** {total}\n\n"
         
         # Barras de progreso
@@ -4306,21 +4384,18 @@ class PollView(discord.ui.View):
                 description += f"└ {bar} `{percentage:.1f}%` ({votes} votos)\n\n"
             else:
                 voters = get_voter_list(self.poll_data, i)
-                voter_mentions = []
-                for v_id in voters[:10]:  # Mostrar máximo 10
-                    try:
-                        # Intentar obtener el usuario
-                        pass
-                    except:
-                        voter_mentions.append(f"<@{v_id}>")
-                
-                voters_text = ", ".join(voter_mentions) if voter_mentions else "*(anónimo)*"
+                voter_mentions = [f"<@{v_id}>" for v_id in voters[:10]]  # Mostrar máximo 10
+
+                voters_text = ", ".join(voter_mentions) if voter_mentions else "*Sin votos aún*"
                 if len(voters) > 10:
                     voters_text += f" y {len(voters) - 10} más..."
-                
+
                 description += f"{emoji} **{option}**\n"
                 description += f"└ {bar} `{percentage:.1f}%` ({votes} votos)\n"
-                description += f"└ 👤 {voters_text}\n\n"
+                if votes > 0:
+                    description += f"└ 👤 {voters_text}\n\n"
+                else:
+                    description += "\n"
         
         # Información adicional
         info = []
@@ -4353,18 +4428,8 @@ class PollView(discord.ui.View):
             except:
                 pass
         
-        embed.set_footer(
-            text=footer_text,
-            icon_url="https://cdn.discordapp.com/emojis/123456789.png"  # Icono opcional
-        )
-        
-        # Autor (creador)
-        try:
-            # No podemos obtener el usuario aquí, se añade al crear
-            pass
-        except:
-            pass
-        
+        embed.set_footer(text=footer_text)
+
         return embed
     
     def _create_progress_bar(self, percentage: float, length: int = 12) -> str:
@@ -4921,7 +4986,23 @@ class AnnounceModal(discord.ui.Modal):
             max_length=20
         )
         self.add_item(self.color)
-    
+
+        self.imagen = discord.ui.TextInput(
+            label="Imagen (URL, opcional)",
+            placeholder="https://...",
+            required=False,
+            max_length=300
+        )
+        self.add_item(self.imagen)
+
+        self.mencion = discord.ui.TextInput(
+            label="Mención (opcional)",
+            placeholder="@everyone, @here, o vacío",
+            required=False,
+            max_length=20
+        )
+        self.add_item(self.mencion)
+
     async def on_submit(self, interaction: discord.Interaction):
         # Configurar color
         color_map = {
@@ -4961,7 +5042,11 @@ class AnnounceModal(discord.ui.Modal):
         # Agregar thumbnail del servidor
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
-        
+
+        # Imagen grande opcional
+        if self.imagen.value and self.imagen.value.strip().startswith("http"):
+            embed.set_image(url=self.imagen.value.strip())
+
         # Agregar campo de "publicado por"
         embed.add_field(
             name="📌 Publicado por",
@@ -4976,9 +5061,20 @@ class AnnounceModal(discord.ui.Modal):
         
         # Añadir separador visual
         embed.add_field(name="\u200b", value="━━━━━━━━━━━━━━━━━━━━━━━", inline=False)
-        
+
+        # Mención opcional (@everyone / @here)
+        mencion_raw = (self.mencion.value or "").strip().lower()
+        content = None
+        allowed_mentions = discord.AllowedMentions.none()
+        if mencion_raw in ("@everyone", "everyone"):
+            content = "@everyone"
+            allowed_mentions = discord.AllowedMentions(everyone=True)
+        elif mencion_raw in ("@here", "here"):
+            content = "@here"
+            allowed_mentions = discord.AllowedMentions(everyone=True)
+
         # Enviar el anuncio
-        await self.channel.send(embed=embed)
+        await self.channel.send(content=content, embed=embed, allowed_mentions=allowed_mentions)
         
         # Confirmar al usuario
         embed_confirm = build_embed(
@@ -6082,16 +6178,298 @@ async def on_message(message: discord.Message):
 async def warn_user(interaction: discord.Interaction, usuario: discord.Member, razon: str = "Sin razón especificada"):
     if usuario.id == Config.OWNER_ID:
         return await interaction.response.send_message(embed=build_embed(title="Error", description="No puedo advertir al Owner.", color=Config.COLOR_ERROR), ephemeral=True)
-    
-    # DM to user
+
+    total = add_warn(interaction.guild_id, usuario.id, razon, str(interaction.user))
+
+    # DM al usuario
     try:
-        await usuario.send(embed=build_embed(title="Has sido advertido", description=f"Has recibido una advertencia en **{interaction.guild.name}**.\n**Razón:** {razon}", color=Config.COLOR_WARNING))
+        await usuario.send(embed=build_embed(
+            title="⚠️ Has sido advertido",
+            description=f"Has recibido una advertencia en **{interaction.guild.name}**.",
+            color=Config.COLOR_WARNING,
+            fields=[
+                ("📋 Razón", razon, False),
+                ("🔢 Total de advertencias", str(total), True),
+                ("👤 Moderador", str(interaction.user), True),
+            ]
+        ))
     except:
         pass
-        
-    embed = build_embed(title="Usuario Advertido", description=f"Se ha advertido a {usuario.mention}.", color=Config.COLOR_SUCCESS, fields=[("Razón", razon, False)])
+
+    embed = build_embed(
+        title="Usuario Advertido",
+        description=f"Se ha advertido a {usuario.mention}.",
+        color=Config.COLOR_SUCCESS,
+        fields=[
+            ("Razón", razon, False),
+            ("Total de advertencias", str(total), True),
+        ]
+    )
     await interaction.response.send_message(embed=embed)
-    record_log(interaction.guild_id, "Warn", f"{usuario} fue advertido por: {razon}", str(interaction.user))
+    record_log(interaction.guild_id, "Warn", f"{usuario} fue advertido por: {razon} (total: {total})", str(interaction.user))
+
+
+@bot.tree.command(name="warnings", description="📋 Muestra las advertencias de un usuario.")
+@app_commands.describe(usuario="El usuario a consultar")
+@app_commands.checks.has_permissions(kick_members=True)
+async def warnings_cmd(interaction: discord.Interaction, usuario: discord.Member):
+    entries = get_warns(interaction.guild_id, usuario.id)
+
+    if not entries:
+        embed = build_embed(
+            title="✅ Sin advertencias",
+            description=f"{usuario.mention} no tiene advertencias registradas.",
+            color=Config.COLOR_SUCCESS
+        )
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    lines = []
+    for i, w in enumerate(entries[-15:], start=1):
+        ts = w.get("timestamp", "")
+        try:
+            dt = datetime.fromisoformat(ts)
+            fecha = f"<t:{int(dt.timestamp())}:R>"
+        except:
+            fecha = "?"
+        lines.append(f"**#{i}** · {w.get('reason', 'Sin razón')}\n└ 👤 {w.get('moderator', '?')} · {fecha}")
+
+    embed = build_embed(
+        title=f"⚠️ Advertencias de {usuario.display_name}",
+        description="\n\n".join(lines),
+        color=Config.COLOR_WARNING,
+        thumbnail=usuario.display_avatar.url,
+        footer=f"Total: {len(entries)} advertencia(s)"
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="clearwarns", description="🧹 Elimina todas las advertencias de un usuario.")
+@app_commands.describe(usuario="El usuario a limpiar")
+@app_commands.checks.has_permissions(administrator=True)
+async def clearwarns_cmd(interaction: discord.Interaction, usuario: discord.Member):
+    count = clear_warns(interaction.guild_id, usuario.id)
+    embed = build_embed(
+        title="🧹 Advertencias eliminadas",
+        description=f"Se eliminaron **{count}** advertencia(s) de {usuario.mention}.",
+        color=Config.COLOR_SUCCESS
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    record_log(interaction.guild_id, "ClearWarns", f"Se limpiaron {count} advertencias de {usuario}", str(interaction.user))
+
+
+@bot.tree.command(name="slowmode", description="🐌 Configura el modo lento del canal actual.")
+@app_commands.describe(segundos="Segundos entre mensajes (0 para desactivar, máx. 21600)")
+@app_commands.checks.has_permissions(manage_channels=True)
+async def slowmode_cmd(interaction: discord.Interaction, segundos: app_commands.Range[int, 0, 21600]):
+    await interaction.channel.edit(slowmode_delay=segundos)
+    if segundos == 0:
+        desc = f"Se desactivó el modo lento en {interaction.channel.mention}."
+    else:
+        desc = f"Se configuró el modo lento a **{segundos}s** en {interaction.channel.mention}."
+    embed = build_embed(title="🐌 Modo lento actualizado", description=desc, color=Config.COLOR_SUCCESS)
+    await interaction.response.send_message(embed=embed)
+    record_log(interaction.guild_id, "Slowmode", f"Modo lento de #{interaction.channel.name} a {segundos}s", str(interaction.user))
+
+
+@bot.tree.command(name="nick", description="✏️ Cambia el apodo de un usuario.")
+@app_commands.describe(usuario="El usuario a modificar", apodo="Nuevo apodo (vacío para quitarlo)")
+@app_commands.checks.has_permissions(manage_nicknames=True)
+async def nick_cmd(interaction: discord.Interaction, usuario: discord.Member, apodo: str | None = None):
+    try:
+        await usuario.edit(nick=apodo)
+    except discord.Forbidden:
+        embed = build_embed(title="❌ Error", description="No tengo permisos para cambiar el apodo de ese usuario.", color=Config.COLOR_ERROR)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    desc = f"Se restableció el apodo de {usuario.mention}." if not apodo else f"El apodo de {usuario.mention} ahora es **{apodo}**."
+    embed = build_embed(title="✏️ Apodo actualizado", description=desc, color=Config.COLOR_SUCCESS)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    record_log(interaction.guild_id, "Nick", f"Apodo de {usuario} cambiado a: {apodo or '(restablecido)'}", str(interaction.user))
+
+
+@bot.tree.command(name="softban", description="🔨 Banea y desbanea al instante para borrar mensajes recientes.")
+@app_commands.describe(usuario="El usuario a softbanear", razon="Razón del softban", dias="Días de mensajes a borrar (1-7)")
+@app_commands.checks.has_permissions(ban_members=True)
+async def softban_cmd(interaction: discord.Interaction, usuario: discord.Member, razon: str = "No especificada", dias: app_commands.Range[int, 1, 7] = 1):
+    if usuario.id == Config.OWNER_ID:
+        return await interaction.response.send_message(embed=build_embed(title="Error", description="No puedo softbanear al Owner.", color=Config.COLOR_ERROR), ephemeral=True)
+
+    try:
+        await usuario.send(embed=build_embed(
+            title="🔨 Has sido expulsado (softban)",
+            description=f"Tus mensajes recientes fueron eliminados en **{interaction.guild.name}** y puedes volver a unirte.",
+            color=Config.COLOR_WARNING,
+            fields=[("📋 Razón", razon, False)]
+        ))
+    except:
+        pass
+
+    try:
+        await interaction.guild.ban(usuario, reason=f"Softban por {interaction.user}: {razon}", delete_message_days=dias)
+        await interaction.guild.unban(usuario, reason="Softban - desbaneo automático")
+    except discord.Forbidden:
+        embed = build_embed(title="❌ Error", description="No tengo permisos suficientes para softbanear a este usuario.", color=Config.COLOR_ERROR)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    embed = build_embed(
+        title="🔨 Softban aplicado",
+        description=f"Se limpiaron los mensajes recientes de {usuario.mention} y fue desbaneado automáticamente.",
+        color=Config.COLOR_SUCCESS,
+        fields=[("Razón", razon, False), ("Días de mensajes borrados", str(dias), True)]
+    )
+    await interaction.response.send_message(embed=embed)
+    record_log(interaction.guild_id, "Softban", f"{usuario} softbaneado por: {razon}", str(interaction.user))
+
+
+# ──────────────────────────────────────────────────────────────
+#  DMS DESDE EL BOT (/dm y /dm-masivo)
+# ──────────────────────────────────────────────────────────────
+
+class DMModal(discord.ui.Modal):
+    """Modal para redactar un DM profesional a un usuario o a un rol."""
+
+    def __init__(self, target_label: str, on_send):
+        super().__init__(title="✉️ Redactar mensaje directo")
+        self.target_label = target_label
+        self.on_send = on_send
+
+        self.titulo = discord.ui.TextInput(
+            label="Título",
+            placeholder="Ej: Aviso importante de Nexus",
+            required=True,
+            max_length=100
+        )
+        self.add_item(self.titulo)
+
+        self.mensaje = discord.ui.TextInput(
+            label="Mensaje",
+            style=discord.TextStyle.paragraph,
+            placeholder="Escribe el contenido del mensaje aquí...",
+            required=True,
+            max_length=2000
+        )
+        self.add_item(self.mensaje)
+
+        self.color = discord.ui.TextInput(
+            label="Color (opcional)",
+            placeholder="azul, rojo, verde, dorado, morado, o #RRGGBB",
+            required=False,
+            max_length=20
+        )
+        self.add_item(self.color)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        color_map = {
+            "azul": 0x5865F2, "rojo": 0xED4245, "verde": 0x57F287,
+            "dorado": 0xFEE75C, "morado": 0x9B59B6, "naranja": 0xF57C00, "rosa": 0xEB459E,
+        }
+        color_input = (self.color.value or "").lower()
+        color = color_map.get(color_input, 0x5865F2)
+        if color_input.startswith("#"):
+            try:
+                color = int(color_input[1:], 16)
+            except:
+                color = 0x5865F2
+
+        embed = discord.Embed(
+            title=f"✉️ {self.titulo.value}",
+            description=self.mensaje.value,
+            color=color,
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_footer(
+            text=f"Mensaje de {interaction.guild.name} · Enviado por {interaction.user.display_name}",
+            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+        )
+        if interaction.guild.icon:
+            embed.set_thumbnail(url=interaction.guild.icon.url)
+
+        await self.on_send(interaction, embed)
+
+
+@bot.tree.command(name="dm", description="✉️ [Mod] Envía un mensaje directo profesional a un usuario.")
+@app_commands.describe(usuario="Usuario al que enviarle el DM")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def dm_cmd(interaction: discord.Interaction, usuario: discord.Member):
+    track_command(interaction.guild_id, "dm")
+
+    if usuario.bot:
+        embed = build_embed(title="❌ Error", description="No puedes enviarle un DM a un bot.", color=COLOR_WARN)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def send_single(modal_interaction: discord.Interaction, embed: discord.Embed):
+        try:
+            await usuario.send(embed=embed)
+            confirm = build_embed(
+                title="✅ Mensaje enviado",
+                description=f"Se envió el DM correctamente a {usuario.mention}.",
+                color=COLOR_OK
+            )
+            record_log(
+                interaction.guild_id, "moderacion",
+                f"{interaction.user} envió un DM a {usuario}: {embed.title}",
+                str(interaction.user)
+            )
+        except discord.Forbidden:
+            confirm = build_embed(
+                title="⚠️ No se pudo entregar",
+                description=f"{usuario.mention} tiene los DMs cerrados o bloqueó al bot.",
+                color=COLOR_WARN
+            )
+        await modal_interaction.response.send_message(embed=confirm, ephemeral=True)
+
+    modal = DMModal(usuario.display_name, send_single)
+    await interaction.response.send_modal(modal)
+
+
+@bot.tree.command(name="dm-masivo", description="📨 [Admin] Envía un DM profesional a todos los usuarios de un rol.")
+@app_commands.describe(rol="Rol al que enviarle el mensaje")
+@app_commands.checks.has_permissions(administrator=True)
+async def dm_masivo_cmd(interaction: discord.Interaction, rol: discord.Role):
+    track_command(interaction.guild_id, "dm-masivo")
+
+    miembros = [m for m in rol.members if not m.bot]
+    if not miembros:
+        embed = build_embed(title="❌ Rol vacío", description=f"El rol {rol.mention} no tiene miembros a los que enviar mensajes.", color=COLOR_WARN)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def send_bulk(modal_interaction: discord.Interaction, embed: discord.Embed):
+        await modal_interaction.response.send_message(
+            embed=build_embed(
+                title="📨 Enviando mensajes...",
+                description=f"Enviando a **{len(miembros)}** miembro(s) con el rol {rol.mention}. Esto puede tardar un poco.",
+                color=COLOR_MAIN
+            ),
+            ephemeral=True
+        )
+
+        enviados, fallidos = 0, 0
+        for miembro in miembros:
+            try:
+                await miembro.send(embed=embed)
+                enviados += 1
+            except:
+                fallidos += 1
+            await asyncio.sleep(1)  # evitar rate limits de DMs
+
+        resumen = build_embed(
+            title="✅ Envío masivo completado",
+            description=f"Resultado del envío a {rol.mention}.",
+            color=COLOR_OK,
+            fields=[
+                ("📬 Enviados", str(enviados), True),
+                ("🚫 Fallidos (DMs cerrados)", str(fallidos), True),
+            ]
+        )
+        await modal_interaction.followup.send(embed=resumen, ephemeral=True)
+        record_log(
+            interaction.guild_id, "moderacion",
+            f"{interaction.user} envió un DM masivo al rol {rol.name}: {embed.title} ({enviados} enviados, {fallidos} fallidos)",
+            str(interaction.user)
+        )
+
+    modal = DMModal(rol.name, send_bulk)
+    await interaction.response.send_modal(modal)
 
 @bot.tree.command(name="purge", description="✨ Elimina mensajes en masa (Clear).")
 @app_commands.describe(cantidad="Cantidad de mensajes a eliminar (1-100)")
