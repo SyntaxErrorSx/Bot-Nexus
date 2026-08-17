@@ -1555,6 +1555,20 @@ FFMPEG_OPTIONS = {
     "options": "-vn",
 }
 
+# ⚡ OPTIMIZACIÓN DE VELOCIDAD: pedirle a yt-dlp varios "player_client" a la vez
+# (tv+android+ios+web) NO es "probar uno y si falla probar el otro" — yt-dlp
+# los consulta A TODOS en cada búsqueda y combina los resultados. Eso multiplica
+# por 4 el tiempo de cada /play, que es la causa real de la lentitud (no la
+# reproducción en sí). "tv" es el cliente que ya evita el bloqueo de "confirmá
+# que no sos un bot" (ver comentario más arriba), así que lo usamos solo como
+# intento rápido; sólo si ESE falla, se reintenta con los 4 clientes completos
+# como red de seguridad — no se pierde nada de la robustez que ya tenían.
+YTDL_FORMAT_OPTIONS_FAST = {
+    **YTDL_FORMAT_OPTIONS,
+    "extractor_args": {"youtube": {"player_client": ["tv"]}},
+}
+
+_ytdl_fast = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS_FAST)
 _ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
 
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
@@ -1597,12 +1611,20 @@ async def ytdl_extract(query: str) -> tuple[dict | None, str | None]:
     
     search_term = query if URL_REGEX.match(query) else f"ytsearch1:{query}"
 
-    partial = functools.partial(_ytdl.extract_info, search_term, download=False)
+    # ⚡ Intento rápido (1 solo cliente). Si falla por lo que sea, reintentamos
+    # con los 4 clientes completos como red de seguridad — más lento, pero es
+    # exactamente el mismo comportamiento robusto que había antes.
+    fast_partial = functools.partial(_ytdl_fast.extract_info, search_term, download=False)
     try:
-        data = await loop.run_in_executor(None, partial)
-    except Exception as e:
-        print(f"Error de yt-dlp al buscar '{query}': {e}")
-        return None, str(e)
+        data = await loop.run_in_executor(None, fast_partial)
+    except Exception as e_fast:
+        print(f"⚡ Intento rápido de yt-dlp falló para '{query}' ({e_fast}); reintentando con todos los clientes...")
+        full_partial = functools.partial(_ytdl.extract_info, search_term, download=False)
+        try:
+            data = await loop.run_in_executor(None, full_partial)
+        except Exception as e:
+            print(f"Error de yt-dlp al buscar '{query}': {e}")
+            return None, str(e)
 
     if data is None:
         return None, "yt-dlp no devolvió resultados."
