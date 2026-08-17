@@ -1493,6 +1493,10 @@ yt_dlp.utils.bug_reports_message = lambda *args, **kwargs: ""
 
 URL_REGEX = re.compile(r"^https?://", re.IGNORECASE)
 
+COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "cookies.txt")
+if not os.path.isfile(COOKIES_FILE):
+    COOKIES_FILE = None
+
 YTDL_FORMAT_OPTIONS = {
     "format": "bestaudio[ext=webm]/bestaudio/best",
     "noplaylist": True,
@@ -1504,16 +1508,21 @@ YTDL_FORMAT_OPTIONS = {
     "source_address": "0.0.0.0",
     "extract_flat": False,
     "geo_bypass": True, 
-    "cookiefile": None,
-    # ✅ FIX: YouTube empezó a exigir "confirmá que no sos un bot" con el
-    # cliente web por defecto. Forzar el cliente "android"/"ios" evita esa
-    # verificación y es la causa más común de que /play deje de funcionar.
+    "cookiefile": COOKIES_FILE,
+    # ✅ FIX: YouTube endureció la verificación "confirmá que no sos un bot" en 2025.
+    # El cliente "tv" suele evitarla sin necesitar cookies; si igual falla, hace falta
+    # subir un cookies.txt (ver YTDLP_COOKIES_FILE más abajo).
     "extractor_args": {
         "youtube": {
-            "player_client": ["android", "ios", "web"],
+            "player_client": ["tv", "android", "ios", "web"],
         }
     },
 }
+
+if COOKIES_FILE:
+    print(f"✅ Usando cookies de YouTube desde: {COOKIES_FILE}")
+else:
+    print("⚠️  No se encontró cookies.txt para YouTube. Si /play falla con 'Sign in to confirm you're not a bot', subí un cookies.txt (ver YTDLP_COOKIES_FILE) — es la única solución 100% confiable ante ese error.")
 
 # reconnect_* ayuda a que la transmisión sobreviva a cortes de red breves.
 FFMPEG_OPTIONS = {
@@ -1593,6 +1602,20 @@ def create_progress_bar(current: float, total: float, length: int = 15) -> str:
     filled = int((current / total) * length)
     filled = max(0, min(length, filled))
     return "▬" * filled + "🔘" + "▬" * (length - filled)
+
+
+def format_ytdlp_error(error: str | None) -> str:
+    """Traduce errores comunes de yt-dlp a un mensaje entendible en español."""
+    if not error:
+        return "Sin detalles"
+    if "Sign in to confirm" in error or "not a bot" in error:
+        return (
+            "YouTube le está pidiendo al bot que confirme que 'no es un bot'. "
+            "Esto pasa cada vez más seguido y la única solución confiable es subir un archivo "
+            "`cookies.txt` (exportado de una cuenta de YouTube logueada) al servidor y configurar "
+            "la variable de entorno `YTDLP_COOKIES_FILE` con su ruta. Sin eso, YouTube seguirá bloqueando la descarga."
+        )
+    return error[:500]
 
 
 class Song:
@@ -1692,7 +1715,7 @@ async def _play_next_locked(guild_id: int) -> None:
                     title="⚠️ No se pudo reproducir una canción",
                     description=(
                         f"Se saltó **{next_song.title}** por un error al obtener el audio.\n"
-                        f"```{(error or 'Error desconocido')[:500]}```"
+                        f"```{format_ytdlp_error(error)}```"
                     ),
                     color=COLOR_WARN,
                 ))
@@ -1987,7 +2010,7 @@ async def play(interaction: discord.Interaction, query: str):
             description=(
                 f"No se encontró: `{query}`\n\n"
                 f"💡 **Sugerencias:**\n• Usa el nombre de la canción directamente\n• Asegúrate de que la URL sea válida\n• El video podría estar restringido por región/edad\n\n"
-                f"```{(error or 'Sin detalles')[:500]}```"
+                f"```{format_ytdlp_error(error)}```"
             ),
             color=COLOR_WARN,
         )
@@ -5188,10 +5211,16 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             color=COLOR_WARN,
         )
 
-    if interaction.response.is_done():
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    else:
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+    except discord.NotFound:
+        # La interacción ya expiró (pasaron más de 15 min, o más de 3s sin defer). No hay nada más que hacer.
+        pass
+    except discord.HTTPException as e:
+        print(f"No se pudo notificar el error al usuario: {e}")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -7246,6 +7275,7 @@ async def panel_autoroles_cmd(
     rol5: discord.Role | None = None, emoji5: str | None = None,
 ):
     track_command(interaction.guild_id, "panel-autoroles")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     target = canal or interaction.channel
 
     pares = [(rol1, emoji1), (rol2, emoji2), (rol3, emoji3), (rol4, emoji4), (rol5, emoji5)]
@@ -7260,13 +7290,13 @@ async def panel_autoroles_cmd(
                 description=f"El rol {rol.mention} está por encima o al mismo nivel que mi rol más alto. Subí mi rol en la lista de roles del servidor e intentá de nuevo.",
                 color=COLOR_WARN,
             )
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await interaction.followup.send(embed=embed, ephemeral=True)
         roles_data.append({"role_id": rol.id, "label": rol.name, "emoji": emoji})
         lineas_desc.append(f"{emoji + ' ' if emoji else '🔹 '}{rol.mention}")
 
     if not roles_data:
         embed = build_embed(title="❌ Faltan roles", description="Tenés que indicar al menos un rol (`rol1`).", color=COLOR_WARN)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await interaction.followup.send(embed=embed, ephemeral=True)
 
     embed = discord.Embed(
         title=titulo,
@@ -7284,7 +7314,7 @@ async def panel_autoroles_cmd(
         message = await target.send(embed=embed, view=view)
     except discord.Forbidden:
         embed = build_embed(title="❌ Sin permisos", description=f"No tengo permisos para enviar mensajes en {target.mention}.", color=COLOR_WARN)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await interaction.followup.send(embed=embed, ephemeral=True)
 
     cfg = get_guild_config(interaction.guild_id)
     cfg.setdefault("autorole_panels", []).append({
@@ -7299,7 +7329,7 @@ async def panel_autoroles_cmd(
         description=f"El panel de autoroles se publicó en {target.mention} con {len(roles_data)} rol(es).",
         color=COLOR_OK,
     )
-    await interaction.response.send_message(embed=confirm, ephemeral=True)
+    await interaction.followup.send(embed=confirm, ephemeral=True)
 
 
 @bot.tree.command(name="panel-autoroles-quitar", description="[Admin] Elimina un panel de autoroles guardado (no borra el mensaje).")
