@@ -1498,7 +1498,11 @@ if not os.path.isfile(COOKIES_FILE):
     COOKIES_FILE = None
 
 YTDL_FORMAT_OPTIONS = {
-    "format": "bestaudio[ext=webm]/bestaudio/best",
+    # ✅ FIX: "bestaudio[ext=webm]" descartaba TODOS los formatos si el único
+    # audio disponible venía en m4a/mp4 (algo cada vez más común desde que
+    # YouTube fuerza "SABR streaming" en varios clientes). Con "bestaudio/best"
+    # yt-dlp elige el mejor audio que haya, sea cual sea el contenedor.
+    "format": "bestaudio/best",
     "noplaylist": True,
     "nocheckcertificate": True,
     "ignoreerrors": False,
@@ -1517,12 +1521,30 @@ YTDL_FORMAT_OPTIONS = {
             "player_client": ["tv", "android", "ios", "web"],
         }
     },
+    # ✅ FIX (causa real de "Requested format is not available"): desde
+    # yt-dlp 2025.11.12, YouTube obliga a resolver un challenge JS para
+    # entregar URLs de audio reales. Sin un JS runtime, yt-dlp descarta
+    # esos formatos y no queda ninguno "disponible" → de ahí el error,
+    # tanto en links como en búsquedas por nombre. "deno" se instala con
+    # el extra [deno] de requirements.txt (ver requirements.txt), no hace
+    # falta instalar nada aparte en el servidor/Render.
+    "js_runtimes": {"deno": {}},
 }
 
 if COOKIES_FILE:
     print(f"✅ Usando cookies de YouTube desde: {COOKIES_FILE}")
 else:
     print("⚠️  No se encontró cookies.txt para YouTube. Si /play falla con 'Sign in to confirm you're not a bot', subí un cookies.txt (ver YTDLP_COOKIES_FILE) — es la única solución 100% confiable ante ese error.")
+
+# ✅ Diagnóstico del JS runtime (deno). Si no está instalado, YouTube va a
+# seguir tirando "Requested format is not available" con links y búsquedas.
+if shutil.which("deno"):
+    print("✅ JS runtime 'deno' encontrado, yt-dlp puede resolver los formatos de YouTube.")
+else:
+    print("⚠️  No se encontró el binario 'deno' en el PATH. Desde nov-2025 YouTube exige resolver "
+          "un challenge JS para entregar audio; sin deno, /play va a fallar con 'Requested format is "
+          "not available' tanto en links como en búsquedas. Instalá el extra [deno] de yt-dlp "
+          "(ver requirements.txt) y volvé a desplegar.")
 
 # reconnect_* ayuda a que la transmisión sobreviva a cortes de red breves.
 FFMPEG_OPTIONS = {
