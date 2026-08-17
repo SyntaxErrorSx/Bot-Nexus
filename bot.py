@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import shutil
 import threading
 from datetime import datetime, timezone, timedelta
 from collections import Counter
@@ -134,6 +135,7 @@ DEFAULT_GUILD_CONFIG = {
     "farewell_message": "**{username}** ha abandonado el servidor. Ahora somos **{membercount}** miembros. 👋",
     "farewell_banner": None,
     "autorole_id": None,
+    "autorole_panels": [],
     "antilink_enabled": False,
     "antispam_enabled": False,
     "suggestions_channel": None,
@@ -1358,8 +1360,10 @@ HELP_CATEGORIES = {
             ("/enlace", "Muestra el enlace vigente (requiere rol Insiders/VIP)."),
             ("/server-info", "Muestra información general del servidor."),
             ("/buscar", "Busca miembros por nombre."),
-            ("/avatar", "Muestra el avatar de un usuario."),
+            ("/avatar", "Muestra el avatar de un usuario (con botones para descargarlo)."),
             ("/user-info", "Muestra información de un usuario."),
+            ("/roleinfo", "Muestra información detallada de un rol."),
+            ("/botinfo", "Muestra el estado técnico del bot."),
             ("/ayuda-error", "Te ayuda a diagnosticar un mensaje de error."),
         ],
     },
@@ -1376,6 +1380,9 @@ HELP_CATEGORIES = {
             ("/test-despedida", "Previsualiza el mensaje de despedida."),
             ("/say", "Hace que el bot envíe un mensaje."),
             ("/ver-config", "Muestra la configuración actual del bot."),
+            ("/panel-autoroles", "Publica un panel con botones para que la gente se ponga roles solita."),
+            ("/panel-autoroles-quitar", "Elimina un panel de autoroles guardado."),
+            ("/purge-usuario", "Elimina los últimos mensajes de un usuario en el canal."),
         ],
     },
     "stats": {
@@ -1487,7 +1494,7 @@ yt_dlp.utils.bug_reports_message = lambda *args, **kwargs: ""
 URL_REGEX = re.compile(r"^https?://", re.IGNORECASE)
 
 YTDL_FORMAT_OPTIONS = {
-    "format": "bestaudio/best",
+    "format": "bestaudio[ext=webm]/bestaudio/best",
     "noplaylist": True,
     "nocheckcertificate": True,
     "ignoreerrors": False,
@@ -1498,6 +1505,14 @@ YTDL_FORMAT_OPTIONS = {
     "extract_flat": False,
     "geo_bypass": True, 
     "cookiefile": None,
+    # ✅ FIX: YouTube empezó a exigir "confirmá que no sos un bot" con el
+    # cliente web por defecto. Forzar el cliente "android"/"ios" evita esa
+    # verificación y es la causa más común de que /play deje de funcionar.
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android", "ios", "web"],
+        }
+    },
 }
 
 # reconnect_* ayuda a que la transmisión sobreviva a cortes de red breves.
@@ -1508,10 +1523,18 @@ FFMPEG_OPTIONS = {
 
 _ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
 
+FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
+if not FFMPEG_AVAILABLE:
+    print("⚠️  FFmpeg no está instalado o no está en el PATH. La música NO va a poder reproducirse hasta que instales FFmpeg en el servidor/host.")
+
 
 # En la función ytdl_extract, puedes añadir limpieza de URL
-async def ytdl_extract(query: str) -> dict | None:
-    """Busca o resuelve una canción (nombre o URL) usando yt-dlp sin bloquear el event loop."""
+async def ytdl_extract(query: str) -> tuple[dict | None, str | None]:
+    """Busca o resuelve una canción (nombre o URL) usando yt-dlp sin bloquear el event loop.
+
+    Devuelve (datos, error). Si hay un error, datos es None y error trae el motivo
+    en texto plano para poder mostrárselo al usuario en Discord.
+    """
     loop = asyncio.get_event_loop()
     
     # Limpiar la URL de parámetros de lista
@@ -1538,19 +1561,19 @@ async def ytdl_extract(query: str) -> dict | None:
         data = await loop.run_in_executor(None, partial)
     except Exception as e:
         print(f"Error de yt-dlp al buscar '{query}': {e}")
-        return None
+        return None, str(e)
 
     if data is None:
-        return None
+        return None, "yt-dlp no devolvió resultados."
 
     # Si es una lista de reproducción, tomar el primer elemento
     if "entries" in data:
         entries = [e for e in data["entries"] if e]
         if not entries:
-            return None
+            return None, "No se encontraron resultados válidos."
         data = entries[0]
 
-    return data
+    return data, None
 
 
 def format_duration(seconds) -> str:
@@ -1614,13 +1637,13 @@ def get_music_state(guild_id: int) -> GuildMusicState:
     return music_states[guild_id]
 
 
-async def resolve_and_queue(query: str, guild_id: int, requester: discord.abc.User) -> Song | None:
-    data = await ytdl_extract(query)
+async def resolve_and_queue(query: str, guild_id: int, requester: discord.abc.User) -> tuple[Song | None, str | None]:
+    data, error = await ytdl_extract(query)
     if data is None:
-        return None
+        return None, error
     song = Song(data, requester)
     get_music_state(guild_id).queue.append(song)
-    return song
+    return song, None
 
 
 async def start_playback(guild_id: int) -> None:
@@ -1661,13 +1684,16 @@ async def _play_next_locked(guild_id: int) -> None:
     if not state.voice_client or not state.voice_client.is_connected():
         return
 
-    data = await ytdl_extract(next_song.webpage_url)
+    data, error = await ytdl_extract(next_song.webpage_url)
     if data is None:
         if state.text_channel:
             try:
                 await state.text_channel.send(embed=build_embed(
                     title="⚠️ No se pudo reproducir una canción",
-                    description=f"Se saltó **{next_song.title}** por un error al obtener el audio.",
+                    description=(
+                        f"Se saltó **{next_song.title}** por un error al obtener el audio.\n"
+                        f"```{(error or 'Error desconocido')[:500]}```"
+                    ),
                     color=COLOR_WARN,
                 ))
             except Exception:
@@ -1834,6 +1860,12 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Error registrando vistas persistentes: {e}")
 
+    try:
+        total_paneles = register_autorole_panels()
+        print(f"✅ {total_paneles} panel(es) de autoroles registrados")
+    except Exception as e:
+        print(f"❌ Error registrando paneles de autoroles: {e}")
+
     # Restaurar canales bloqueados
     data = load_blocked_channels()
     for guild_id_str, channels_data in data.items():
@@ -1919,6 +1951,15 @@ async def play(interaction: discord.Interaction, query: str):
     
     # ✅ RESPONDER INMEDIATAMENTE para evitar timeout
     await interaction.response.defer(ephemeral=True, thinking=True)
+
+    if not FFMPEG_AVAILABLE:
+        embed = build_embed(
+            title="❌ FFmpeg no está instalado",
+            description="El servidor donde corre el bot no tiene `ffmpeg` instalado. Sin FFmpeg la música no puede reproducirse. Avisale al owner del hosting para que lo instale.",
+            color=COLOR_WARN,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
     
     # Verificar que el usuario está en un canal de voz
     if not interaction.user.voice:
@@ -1939,11 +1980,15 @@ async def play(interaction: discord.Interaction, query: str):
     state.text_channel = interaction.channel
     
     # Buscar la canción (esto puede tardar)
-    song = await resolve_and_queue(query, interaction.guild_id, interaction.user)
+    song, error = await resolve_and_queue(query, interaction.guild_id, interaction.user)
     if not song:
         embed = build_embed(
             title="❌ Canción no encontrada",
-            description=f"No se encontró: `{query}`\n\n💡 **Sugerencias:**\n• Usa el nombre de la canción directamente\n• Asegúrate de que la URL sea válida\n• El video podría estar restringido por región/edad",
+            description=(
+                f"No se encontró: `{query}`\n\n"
+                f"💡 **Sugerencias:**\n• Usa el nombre de la canción directamente\n• Asegúrate de que la URL sea válida\n• El video podría estar restringido por región/edad\n\n"
+                f"```{(error or 'Sin detalles')[:500]}```"
+            ),
             color=COLOR_WARN,
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -4012,18 +4057,49 @@ async def buscar(interaction: discord.Interaction, nombre: str):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+class AvatarDownloadView(discord.ui.View):
+    """Vista con botones para descargar el avatar en distintos formatos."""
+
+    def __init__(self, avatar_asset: discord.Asset, server_avatar_asset: discord.Asset | None = None):
+        super().__init__(timeout=None)
+        big = avatar_asset.with_size(1024)
+
+        try:
+            png_url = big.with_format("png").url
+        except ValueError:
+            png_url = big.url
+        try:
+            jpg_url = big.with_format("jpg").url
+        except ValueError:
+            jpg_url = big.url
+
+        self.add_item(discord.ui.Button(label="Descargar PNG", style=discord.ButtonStyle.link, url=png_url, emoji="🖼️"))
+        self.add_item(discord.ui.Button(label="Descargar JPG", style=discord.ButtonStyle.link, url=jpg_url, emoji="📷"))
+
+        if server_avatar_asset is not None:
+            self.add_item(discord.ui.Button(label="Avatar del servidor", style=discord.ButtonStyle.link, url=server_avatar_asset.with_size(1024).url, emoji="🏠"))
+
+
 @bot.tree.command(name="avatar", description="Muestra el avatar de un usuario.")
 @app_commands.describe(usuario="Usuario del que ver el avatar (opcional)")
 async def avatar(interaction: discord.Interaction, usuario: discord.Member | None = None):
     track_command(interaction.guild_id, "avatar")
     usuario = usuario or interaction.user
 
-    embed = build_embed(
+    global_avatar = usuario.avatar or usuario.default_avatar
+    server_avatar = usuario.guild_avatar if isinstance(usuario, discord.Member) else None
+
+    embed = discord.Embed(
         title=f"🖼️ Avatar de {usuario.display_name}",
-        color=COLOR_MAIN,
-        image=usuario.display_avatar.url,
+        color=usuario.color if getattr(usuario, "color", None) and usuario.color.value else COLOR_MAIN,
+        timestamp=datetime.now(timezone.utc),
     )
-    await interaction.response.send_message(embed=embed)
+    embed.set_author(name=str(usuario), icon_url=usuario.display_avatar.url)
+    embed.set_image(url=(server_avatar or global_avatar).with_size(1024).url)
+    embed.set_footer(text=BOT_FOOTER_TEXT, icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
+
+    view = AvatarDownloadView(global_avatar, server_avatar)
+    await interaction.response.send_message(embed=embed, view=view)
 
 
 
@@ -7043,6 +7119,214 @@ async def autorole_cmd(interaction: discord.Interaction, rol: discord.Role | Non
 
 
 # ──────────────────────────────────────────────────────────────
+#  PANEL DE AUTOROLES (roles que la gente se pone solita con botones)
+# ──────────────────────────────────────────────────────────────
+
+AUTOROLE_BUTTON_STYLES = [
+    discord.ButtonStyle.primary,
+    discord.ButtonStyle.success,
+    discord.ButtonStyle.secondary,
+    discord.ButtonStyle.danger,
+]
+
+
+class AutoRolePanelView(discord.ui.View):
+    """Vista persistente: un botón por rol. Al presionarlo, el usuario se lo pone o se lo quita.
+
+    Es completamente autodescriptiva (el custom_id trae el ID del rol), así que
+    sobrevive a un reinicio del bot sin necesitar guardar el message_id.
+    """
+
+    def __init__(self, roles_data: list[dict]):
+        super().__init__(timeout=None)
+        for i, entry in enumerate(roles_data):
+            role_id = entry["role_id"]
+            label = entry.get("label") or "Rol"
+            emoji = entry.get("emoji") or None
+            style = AUTOROLE_BUTTON_STYLES[i % len(AUTOROLE_BUTTON_STYLES)]
+            button = discord.ui.Button(
+                label=label[:80],
+                emoji=emoji,
+                style=style,
+                custom_id=f"autorolepanel:{role_id}",
+            )
+            button.callback = self._make_callback(role_id, label)
+            self.add_item(button)
+
+    def _make_callback(self, role_id: int, label: str):
+        async def callback(interaction: discord.Interaction):
+            guild = interaction.guild
+            member = interaction.user
+            role = guild.get_role(role_id) if guild else None
+
+            if role is None:
+                embed = build_embed(
+                    title="⚠️ Este rol ya no existe",
+                    description="Es probable que un administrador lo haya borrado. Avisale a un admin.",
+                    color=COLOR_WARN,
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+            if guild.me.top_role <= role and guild.owner_id != guild.me.id:
+                embed = build_embed(
+                    title="⚠️ No puedo asignar ese rol",
+                    description=f"El rol {role.mention} está por encima o al mismo nivel que mi rol más alto. Un admin debe subir mi rol en `Configuración del servidor → Roles`.",
+                    color=COLOR_WARN,
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+            try:
+                if role in member.roles:
+                    await member.remove_roles(role, reason="Autorole panel (auto-quitado)")
+                    embed = build_embed(
+                        title="➖ Rol quitado",
+                        description=f"Te quité el rol {role.mention}.",
+                        color=COLOR_AMBER,
+                    )
+                else:
+                    await member.add_roles(role, reason="Autorole panel (auto-asignado)")
+                    embed = build_embed(
+                        title="➕ Rol asignado",
+                        description=f"¡Listo! Ahora tenés el rol {role.mention}.",
+                        color=COLOR_OK,
+                    )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            except discord.Forbidden:
+                embed = build_embed(
+                    title="❌ Sin permisos",
+                    description="No tengo permisos suficientes para gestionar ese rol.",
+                    color=COLOR_WARN,
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        return callback
+
+
+def register_autorole_panels() -> int:
+    """Reconstruye y registra en el bot todas las vistas de paneles de autoroles guardadas,
+    para que los botones sigan funcionando después de un reinicio. Devuelve cuántos registró."""
+    count = 0
+    data = load_config()
+    for guild_id_str, guild_cfg in data.items():
+        panels = guild_cfg.get("autorole_panels") or []
+        for panel in panels:
+            roles_data = panel.get("roles") or []
+            if not roles_data:
+                continue
+            try:
+                bot.add_view(AutoRolePanelView(roles_data))
+                count += 1
+            except Exception as e:
+                print(f"⚠️ No se pudo registrar un panel de autoroles del servidor {guild_id_str}: {e}")
+    return count
+
+
+@bot.tree.command(name="panel-autoroles", description="[Admin] Publica un panel con botones para que la gente se ponga roles solita.")
+@app_commands.describe(
+    canal="Canal donde publicar el panel (por defecto el canal actual)",
+    titulo="Título del panel",
+    descripcion="Texto descriptivo del panel (opcional)",
+    rol1="Rol #1", emoji1="Emoji para el rol #1 (opcional)",
+    rol2="Rol #2 (opcional)", emoji2="Emoji para el rol #2 (opcional)",
+    rol3="Rol #3 (opcional)", emoji3="Emoji para el rol #3 (opcional)",
+    rol4="Rol #4 (opcional)", emoji4="Emoji para el rol #4 (opcional)",
+    rol5="Rol #5 (opcional)", emoji5="Emoji para el rol #5 (opcional)",
+)
+@app_commands.checks.has_permissions(administrator=True)
+async def panel_autoroles_cmd(
+    interaction: discord.Interaction,
+    rol1: discord.Role,
+    titulo: str = "🎭 Elegí tus roles",
+    descripcion: str | None = None,
+    canal: discord.TextChannel | None = None,
+    emoji1: str | None = None,
+    rol2: discord.Role | None = None, emoji2: str | None = None,
+    rol3: discord.Role | None = None, emoji3: str | None = None,
+    rol4: discord.Role | None = None, emoji4: str | None = None,
+    rol5: discord.Role | None = None, emoji5: str | None = None,
+):
+    track_command(interaction.guild_id, "panel-autoroles")
+    target = canal or interaction.channel
+
+    pares = [(rol1, emoji1), (rol2, emoji2), (rol3, emoji3), (rol4, emoji4), (rol5, emoji5)]
+    roles_data = []
+    lineas_desc = []
+    for rol, emoji in pares:
+        if rol is None:
+            continue
+        if rol >= interaction.guild.me.top_role and interaction.guild.owner_id != interaction.guild.me.id:
+            embed = build_embed(
+                title="⚠️ No puedo usar ese rol",
+                description=f"El rol {rol.mention} está por encima o al mismo nivel que mi rol más alto. Subí mi rol en la lista de roles del servidor e intentá de nuevo.",
+                color=COLOR_WARN,
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+        roles_data.append({"role_id": rol.id, "label": rol.name, "emoji": emoji})
+        lineas_desc.append(f"{emoji + ' ' if emoji else '🔹 '}{rol.mention}")
+
+    if not roles_data:
+        embed = build_embed(title="❌ Faltan roles", description="Tenés que indicar al menos un rol (`rol1`).", color=COLOR_WARN)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    embed = discord.Embed(
+        title=titulo,
+        description=(descripcion + "\n\n" if descripcion else "") + "Hacé clic en un botón para ponerte o quitarte ese rol.\n\n" + "\n".join(lineas_desc),
+        color=COLOR_PURPLE,
+        timestamp=datetime.now(timezone.utc),
+    )
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_footer(text=BOT_FOOTER_TEXT)
+
+    view = AutoRolePanelView(roles_data)
+
+    try:
+        message = await target.send(embed=embed, view=view)
+    except discord.Forbidden:
+        embed = build_embed(title="❌ Sin permisos", description=f"No tengo permisos para enviar mensajes en {target.mention}.", color=COLOR_WARN)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    cfg = get_guild_config(interaction.guild_id)
+    cfg.setdefault("autorole_panels", []).append({
+        "message_id": message.id,
+        "channel_id": target.id,
+        "roles": roles_data,
+    })
+    update_guild_config(interaction.guild_id, cfg)
+
+    confirm = build_embed(
+        title="✅ Panel publicado",
+        description=f"El panel de autoroles se publicó en {target.mention} con {len(roles_data)} rol(es).",
+        color=COLOR_OK,
+    )
+    await interaction.response.send_message(embed=confirm, ephemeral=True)
+
+
+@bot.tree.command(name="panel-autoroles-quitar", description="[Admin] Elimina un panel de autoroles guardado (no borra el mensaje).")
+@app_commands.describe(message_id="ID del mensaje del panel (click derecho → Copiar ID)")
+@app_commands.checks.has_permissions(administrator=True)
+async def panel_autoroles_quitar_cmd(interaction: discord.Interaction, message_id: str):
+    track_command(interaction.guild_id, "panel-autoroles-quitar")
+    cfg = get_guild_config(interaction.guild_id)
+    panels = cfg.get("autorole_panels") or []
+    try:
+        target_id = int(message_id)
+    except ValueError:
+        embed = build_embed(title="❌ ID inválido", description="El `message_id` debe ser un número.", color=COLOR_WARN)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    nuevos = [p for p in panels if p.get("message_id") != target_id]
+    if len(nuevos) == len(panels):
+        embed = build_embed(title="❌ No encontrado", description="No hay ningún panel guardado con ese `message_id`.", color=COLOR_WARN)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    cfg["autorole_panels"] = nuevos
+    update_guild_config(interaction.guild_id, cfg)
+    embed = build_embed(title="🗑️ Panel eliminado", description="Se eliminó de la configuración. Los botones dejarán de funcionar en el mensaje original después del próximo reinicio del bot (o podés borrar el mensaje manualmente).", color=COLOR_OK)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ──────────────────────────────────────────────────────────────
 #  GIVEAWAYS (/giveaway)
 # ──────────────────────────────────────────────────────────────
 
@@ -7357,6 +7641,106 @@ async def panel_verificacion_cmd(interaction: discord.Interaction, canal: discor
 
     confirm = build_embed(title="✅ Panel publicado", description=f"El panel de verificación se publicó en {target.mention}.", color=COLOR_OK)
     await interaction.response.send_message(embed=confirm, ephemeral=True)
+
+
+# ──────────────────────────────────────────────────────────────
+#  MÁS UTILIDADES PARA ADMINS
+# ──────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="roleinfo", description="🎭 Muestra información detallada de un rol.")
+@app_commands.describe(rol="El rol a consultar")
+async def roleinfo_cmd(interaction: discord.Interaction, rol: discord.Role):
+    track_command(interaction.guild_id, "roleinfo")
+
+    permisos_clave = []
+    perms = rol.permissions
+    for nombre, activo in [
+        ("Administrador", perms.administrator),
+        ("Gestionar servidor", perms.manage_guild),
+        ("Gestionar roles", perms.manage_roles),
+        ("Gestionar canales", perms.manage_channels),
+        ("Banear miembros", perms.ban_members),
+        ("Expulsar miembros", perms.kick_members),
+        ("Gestionar mensajes", perms.manage_messages),
+        ("Mencionar @everyone", perms.mention_everyone),
+    ]:
+        if activo:
+            permisos_clave.append(f"✅ {nombre}")
+
+    embed = discord.Embed(
+        title=f"🎭 Información del rol · {rol.name}",
+        color=rol.color if rol.color.value else COLOR_MAIN,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="🆔 ID", value=f"`{rol.id}`", inline=True)
+    embed.add_field(name="👥 Miembros", value=str(len(rol.members)), inline=True)
+    embed.add_field(name="📊 Posición", value=str(rol.position), inline=True)
+    embed.add_field(name="🎨 Color", value=str(rol.color), inline=True)
+    embed.add_field(name="📌 Mencionable", value="Sí" if rol.mentionable else "No", inline=True)
+    embed.add_field(name="🔝 Se muestra aparte", value="Sí" if rol.hoist else "No", inline=True)
+    embed.add_field(name="📅 Creado", value=f"<t:{int(rol.created_at.timestamp())}:R>", inline=True)
+    embed.add_field(name="🤖 Gestionado por integración", value="Sí" if rol.managed else "No", inline=True)
+    embed.add_field(
+        name="🔑 Permisos clave",
+        value="\n".join(permisos_clave) if permisos_clave else "Ninguno relevante",
+        inline=False,
+    )
+    embed.set_footer(text=BOT_FOOTER_TEXT)
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="botinfo", description="🤖 Muestra el estado técnico del bot.")
+async def botinfo_cmd(interaction: discord.Interaction):
+    track_command(interaction.guild_id, "botinfo")
+
+    uptime = format_uptime(time.time() - BOT_START_TIME)
+    latencia = round(bot.latency * 1000)
+    total_miembros = sum(g.member_count or 0 for g in bot.guilds)
+
+    embed = discord.Embed(
+        title="🤖 Estado de Nexus",
+        color=COLOR_MAIN,
+        timestamp=datetime.now(timezone.utc),
+    )
+    if bot.user:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+    embed.add_field(name="📶 Latencia", value=f"{latencia}ms", inline=True)
+    embed.add_field(name="⏱️ Uptime", value=uptime, inline=True)
+    embed.add_field(name="🌐 Servidores", value=str(len(bot.guilds)), inline=True)
+    embed.add_field(name="👥 Miembros totales", value=str(total_miembros), inline=True)
+    embed.add_field(name="⚡ Comandos slash", value=str(len(bot.tree.get_commands())), inline=True)
+    embed.add_field(name="🎵 FFmpeg", value="✅ Disponible" if FFMPEG_AVAILABLE else "❌ No encontrado", inline=True)
+    embed.add_field(name="🗄️ Base de datos", value="✅ Supabase" if supabase else "📁 Archivos locales", inline=True)
+    embed.add_field(name="🎶 Reproduciendo música en", value=f"{sum(1 for s in music_states.values() if s.is_playing())} servidor(es)", inline=True)
+    embed.set_footer(text=BOT_FOOTER_TEXT)
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="purge-usuario", description="[Mod] Elimina los últimos mensajes de un usuario específico en este canal.")
+@app_commands.describe(
+    usuario="El usuario cuyos mensajes se van a borrar",
+    cantidad="Cuántos mensajes recientes revisar como máximo (1-200, por defecto 100)",
+)
+@app_commands.checks.has_permissions(manage_messages=True)
+async def purge_usuario_cmd(interaction: discord.Interaction, usuario: discord.Member, cantidad: app_commands.Range[int, 1, 200] = 100):
+    track_command(interaction.guild_id, "purge-usuario")
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    def check(m: discord.Message) -> bool:
+        return m.author.id == usuario.id
+
+    try:
+        borrados = await interaction.channel.purge(limit=cantidad, check=check)
+    except discord.Forbidden:
+        embed = build_embed(title="❌ Sin permisos", description="No tengo permisos para borrar mensajes en este canal.", color=COLOR_WARN)
+        return await interaction.followup.send(embed=embed, ephemeral=True)
+
+    embed = build_embed(
+        title="🧹 Mensajes eliminados",
+        description=f"Se eliminaron **{len(borrados)}** mensaje(s) de {usuario.mention} (de los últimos {cantidad} revisados).",
+        color=COLOR_OK,
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 app = Flask(__name__)
