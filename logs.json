@@ -1,0 +1,22 @@
+{
+  "1518751703019552948": [
+    {
+      "tipo": "enlace",
+      "descripcion": "_nyx_uk actualizó el enlace de descarga.",
+      "autor": "_nyx_uk",
+      "timestamp": "2026-08-16T00:11:27.624097+00:00"
+    },
+    {
+      "tipo": "error",
+      "descripcion": "CommandInvokeError: Command 'actualizar-enlace' raised an exception: HTTPException: 400 Bad Request (error code: 40060): Interaction has already been acknowledged.",
+      "autor": "_nyx_uk",
+      "timestamp": "2026-08-16T00:11:28.957763+00:00"
+    },
+    {
+      "tipo": "error",
+      "descripcion": "CommandInvokeError: Command 'actualizar-enlace' raised an exception: HTTPException: 400 Bad Request (error code: 40060): Interaction has already been acknowledged.",
+      "autor": "_nyx_uk",
+      "timestamp": "2026-08-16T00:46:30.254961+00:00"
+    }
+  ]
+}

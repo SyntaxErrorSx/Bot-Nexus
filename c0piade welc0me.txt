@@ -1,0 +1,4 @@
+✦ NEXUS ACCESS ✦ │ ✓ Usuario autenticado │ ✓ Conexión establecida │ Bienvenido {mention} a **{server}** │ 👥 Comunidad: **{membercount}** │ Tu aventura comienza ahora.
+
+
+https://media.discordapp.net/attachments/1522638320633516053/1527125190025416895/901bs5q.png?ex=6a5a2e69&is=6a58dce9&hm=b9f40f2239ac7d10161697871e39f527a64a225446f3a6e988a37b667ca9ca3e&=&format=webp&quality=lossless&width=1202&height=601

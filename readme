@@ -1,0 +1,121 @@
+# Nexus Bot (Discord)
+
+Bot de Discord para gestionar el acceso al instalador Beta de **Nexus Browser**:
+términos y condiciones, enlace de descarga controlado por rol, avisos de nueva
+versión, comando `/say` y logs de mensajes editados/borrados.
+
+Hecho en **Python** con `discord.py` (slash commands), pensado para desplegar
+en **Render**.
+
+## Comandos
+
+| Comando | Quién puede usarlo | Qué hace |
+|---|---|---|
+| `/legales` | Todos | Muestra el embed de Términos y Condiciones con botones **Sí / No**. Si acepta, se avisa en el canal y se le envía (solo a él) el embed con el enlace del instalador. |
+| `/enlace` | Roles autorizados (Insiders/VIP) | Muestra el enlace vigente del instalador. |
+| `/actualizar-enlace` | Administradores | Cambia el enlace vigente y avisa en el canal de logs de "enlace" que hay nueva versión, mencionando a los roles autorizados. |
+| `/config-logs` | Administradores | Define en qué canal se publican los avisos de **enlace**, **mensajes editados**, **mensajes borrados** y **aceptación de términos**. |
+| `/config-rol-enlace` | Administradores | Agrega o quita un rol de la lista autorizada para usar `/enlace`. |
+| `/say` | Administradores | Hace que el bot envíe el mensaje que le indiques en el canal que elijas (con cooldown de 5s para evitar spam accidental). |
+| `/ver-config` | Administradores | Muestra de un vistazo el enlace actual, los roles autorizados y los canales de log configurados. |
+| `/ping` | Todos | Muestra la latencia del bot. |
+
+El bot también registra automáticamente en el canal de logs correspondiente **quién acepta o rechaza** los Términos y Condiciones (`/config-logs` → "Aceptación de términos").
+
+El bot también registra automáticamente en el canal de logs correspondiente
+cuando alguien **edita** o **borra** un mensaje (si configuraste esos canales
+con `/config-logs`).
+
+## ⚠️ Seguridad del token
+
+El token del bot **nunca** va escrito dentro del código ni se sube a
+GitHub. Siempre se lee desde la variable de entorno `DISCORD_TOKEN`
+(local: archivo `.env`; en Render: pestaña Environment). Si en algún
+momento tu token queda expuesto (pegado en un chat, en un commit público,
+etc.), andá al Developer Portal → tu app → **Bot → Reset Token** y
+generá uno nuevo de inmediato — el anterior queda inutilizable apenas
+lo reseteás.
+
+## 1. Crear la aplicación de Discord
+
+1. Ve a https://discord.com/developers/applications → **New Application**.
+2. En **Bot**, crea el bot y copia el **Token** (lo vas a necesitar como
+   `DISCORD_TOKEN`).
+3. Activa el intent **Message Content Intent** y **Server Members Intent**
+   en la pestaña Bot.
+4. En **OAuth2 → URL Generator**, marca `bot` y `applications.commands`, y
+   en permisos marca al menos: Send Messages, Embed Links, Read Message
+   History, Manage Roles (si vas a usarlo para más cosas), Use Slash
+   Commands. Copia la URL generada y ábrela para invitar el bot a tu
+   servidor.
+
+## 2. Probar en local (opcional)
+
+```bash
+python -m venv venv
+source venv/bin/activate  # en Windows: venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env   # y pega tu token ahí
+```
+
+Como el bot lee el token con `os.getenv`, si corres en local necesitas
+cargarlo. La forma más simple es exportarlo antes de correr:
+
+```bash
+export DISCORD_TOKEN=tu_token   # en Windows: set DISCORD_TOKEN=tu_token
+python bot.py
+```
+
+Tip: si defines también `GUILD_ID` (el ID de tu servidor) en el `.env`,
+los comandos slash se sincronizan al instante en ese servidor en vez de
+tardar hasta 1 hora en propagarse globalmente — muy útil mientras
+pruebas cambios.
+
+## 3. Desplegar en Render
+
+1. Sube esta carpeta a un repositorio de GitHub.
+2. En Render → **New → Web Service**, conecta el repo.
+3. Render detectará el `render.yaml`, o si lo configuras manualmente:
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `python bot.py`
+4. En **Environment**, agrega la variable `DISCORD_TOKEN` con el token del
+   bot.
+5. Deploy. El bot expone un mini servidor web (Flask) en el puerto que da
+   Render solo para que el servicio se mantenga activo — no necesitas
+   hacer nada con esa URL.
+
+> ⚠️ Nota: el plan **free** de Render "duerme" el servicio si no recibe
+> tráfico HTTP. Para que el bot esté 24/7 sin cortes necesitas un plan
+> pago, o pingear la URL del servicio periódicamente con un servicio
+> externo (ej. UptimeRobot) cada 10-15 minutos.
+
+## 4. Configuración inicial dentro de Discord
+
+Una vez el bot esté conectado y los comandos sincronizados (puede tardar
+hasta 1 hora en aparecer si es la primera sincronización global, o ser
+instantáneo si luego migras a sync por servidor):
+
+1. `/config-rol-enlace accion:Agregar rol:@Insiders`
+2. `/config-rol-enlace accion:Agregar rol:@VIP`
+3. `/config-logs tipo:"Avisos de enlace / nueva versión" canal:#anuncios`
+4. `/config-logs tipo:"Mensajes editados" canal:#logs-ediciones`
+5. `/config-logs tipo:"Mensajes borrados" canal:#logs-borrados`
+6. `/config-logs tipo:"Aceptación de términos" canal:#logs-legales`
+7. `/actualizar-enlace nuevo_enlace:https://github.com/.../Nexus-Setup-2.0.6-Beta.exe`
+8. `/ver-config` para confirmar que todo quedó bien
+
+Listo — desde ahí, `/legales` y `/enlace` ya funcionan con la configuración
+guardada.
+
+## Notas importantes
+
+- **Persistencia:** la configuración se guarda en `config.json` en el disco
+  del servicio. En el plan free de Render, el disco **no es persistente**
+  entre despliegues (se resetea si el servicio se reinicia o rehaces un
+  deploy). Si necesitas que la configuración sobreviva reinicios de forma
+  confiable, lo ideal es migrar a una base de datos pequeña (ej. Render
+  Postgres free, o un archivo en un disco persistente de Render — plan
+  pago). Por ahora, si el servicio se reinicia, solo tendrías que volver a
+  correr los comandos de configuración del paso 4.
+- El enlace de instalador que ves en el código (`config.json`) empieza
+  vacío; se configura con `/actualizar-enlace`.

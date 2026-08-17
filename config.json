@@ -1,0 +1,25 @@
+{
+  "1518751703019552948": {
+    "current_link": "https://github.com/santhiagocaro05-debug/NEXUS-INSTALLER/releases/download/installer2/Nexus-Setup-3.0.4.exe",
+    "log_channels": {
+      "enlace": 1522649063609204907,
+      "borrados": 1522649063609204907,
+      "editados": 1522649063609204907,
+      "moderacion": 1527415103073292390,
+      "bienvenidas": 1522649063609204907,
+      "aceptaciones": 1522649063609204907
+    },
+    "roles_enlace": [
+      1522080359230210000,
+      1522080299637276700
+    ],
+    "welcome_banner": "https://media.discordapp.net/attachments/1526996602516930621/1534628586580086985/6wsbv03.png?ex=6a74d1bf&is=6a73803f&hm=cd66577f07fae6974b55c4cf4aa550007b92a8facef878930392213df3555038&=&format=webp&quality=lossless&width=512&height=205",
+    "farewell_banner": null,
+    "welcome_channel": 1518752074538422422,
+    "welcome_enabled": true,
+    "welcome_message": "Bienvenido a **Nexus Studios**, {mention}. A partir de este momento formas parte de una comunidad enfocada en el desarrollo, la innovación y el crecimiento. Te recomendamos leer las reglas del servidor, completar tu configuración inicial y explorar los canales disponibles para acceder a todo el contenido. Nuestro equipo de administración y moderación está disponible para ayudarte si tienes alguna duda o inconveniente. Esperamos que disfrutes tu estancia, participes activamente en la comunidad y formes parte de los próximos proyectos que están por venir. Gracias por unirte a **{server}**. Actualmente somos **{membercount}** miembros. ¡Esperamos verte muy activo!",
+    "farewell_channel": null,
+    "farewell_enabled": false,
+    "farewell_message": "**{username}** ha abandonado el servidor. Ahora somos **{membercount}** miembros. 👋"
+  }
+}
