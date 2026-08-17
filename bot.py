@@ -1425,6 +1425,8 @@ HELP_CATEGORIES = {
             ("/shuffle", "Mezcla aleatoriamente la cola actual."),
             ("/remove", "Elimina una canción específica de la cola."),
             ("/disconnect", "Desconecta al bot del canal de voz."),
+            ("/quedate", "📌 El bot se queda en el canal de voz sin desconectarse solo."),
+            ("/leavebot", "👋 Saca al bot del canal de voz (cancela /quedate)."),
         ],
     },
 }
@@ -1680,6 +1682,7 @@ def build_now_playing_embed(state: "GuildMusicState") -> discord.Embed:
         fields=[
             ("Estado", estado, True),
             ("⏱️ Duración", format_duration(song.duration), True),
+            ("🔊 Volumen", f"{int(state.volume * 100)}%", True),
             ("🔁 Loop", LOOP_MODE_TEXTO.get(state.loop_mode, "Desactivado"), True),
             ("🙋 Pedido por", getattr(song.requester, "mention", str(song.requester)), True),
             ("👤 Canal/Artista", song.uploader, True),
@@ -1816,6 +1819,34 @@ class MusicPanelView(discord.ui.View):
         self._sync_buttons()
         await interaction.response.edit_message(embed=build_now_playing_embed(state), view=self)
 
+    @discord.ui.button(label="Vol -", emoji="🔉", style=discord.ButtonStyle.secondary, row=1)
+    async def vol_down_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._misma_voz(interaction):
+            return
+        state = get_music_state(self.guild_id)
+        if not state.voice_client:
+            return await interaction.response.send_message(
+                embed=build_embed(title="❌ No hay música reproduciéndose", color=COLOR_WARN), ephemeral=True
+            )
+        state.volume = max(0.0, round(state.volume - 0.1, 2))
+        if state.voice_client.source:
+            state.voice_client.source.volume = state.volume
+        await interaction.response.edit_message(embed=build_now_playing_embed(state), view=self)
+
+    @discord.ui.button(label="Vol +", emoji="🔊", style=discord.ButtonStyle.secondary, row=1)
+    async def vol_up_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._misma_voz(interaction):
+            return
+        state = get_music_state(self.guild_id)
+        if not state.voice_client:
+            return await interaction.response.send_message(
+                embed=build_embed(title="❌ No hay música reproduciéndose", color=COLOR_WARN), ephemeral=True
+            )
+        state.volume = min(1.0, round(state.volume + 0.1, 2))
+        if state.voice_client.source:
+            state.voice_client.source.volume = state.volume
+        await interaction.response.edit_message(embed=build_now_playing_embed(state), view=self)
+
 
 class Song:
     """Representa una canción resuelta por yt-dlp, lista para encolar."""
@@ -1852,6 +1883,10 @@ class GuildMusicState:
         self.force_skip_loop: bool = False
         self.lock = asyncio.Lock()
         self.is_paused: bool = False
+        # 📌 Si está en True, el bot NO se desconecta solo por inactividad
+        # (ver disconnect_if_empty). Se activa con /quedate y se desactiva
+        # con /leavebot o al desconectarse manualmente.
+        self.stay_connected: bool = False
         # ⚠️ NO agregar acá "self.is_playing = False": ya existe el método
         # is_playing() de abajo con el MISMO nombre. Un atributo de instancia
         # con el mismo nombre que un método de la clase lo tapa (shadowing):
@@ -2165,13 +2200,16 @@ async def disconnect_if_empty():
     while True:
         await asyncio.sleep(60)  # Revisar cada minuto
         for guild_id, state in list(music_states.items()):
+            if state.stay_connected:
+                # 📌 El servidor pidió con /quedate que el bot no se vaya solo.
+                continue
             if state.voice_client and state.voice_client.is_connected():
                 # Si no está reproduciendo y no hay cola
                 if not state.is_playing() and len(state.queue) == 0:
                     # Esperar 5 minutos antes de desconectar
                     await asyncio.sleep(300)
-                    # Volver a verificar después de la espera
-                    if not state.is_playing() and len(state.queue) == 0:
+                    # Volver a verificar después de la espera (por si en el medio se activó /quedate)
+                    if not state.is_playing() and len(state.queue) == 0 and not state.stay_connected:
                         try:
                             await state.voice_client.disconnect()
                             state.voice_client = None
@@ -2223,17 +2261,24 @@ async def play(interaction: discord.Interaction, query: str):
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
     
-    # Conectar al canal de voz (AHORA con defer ya hecho, no hay timeout)
-    voice_client = await ensure_voice(interaction)
+    # ⚡ Conectar al canal de voz y buscar la canción son dos cosas independientes
+    # entre sí. Antes se hacían una después de la otra (conectar ~1-2s + buscar
+    # ~1-3s = hasta 5s de espera). Corriéndolas en paralelo, el tiempo total es
+    # el del más lento de los dos, no la suma de ambos.
+    voice_task = asyncio.create_task(ensure_voice(interaction))
+    search_task = asyncio.create_task(ytdl_extract(query))
+
+    voice_client = await voice_task
     if not voice_client:
+        # ensure_voice() ya le mandó el mensaje de error correspondiente al usuario.
+        search_task.cancel()
         return
-    
+
     state = get_music_state(interaction.guild_id)
     state.text_channel = interaction.channel
-    
-    # Buscar la canción (esto puede tardar)
-    song, error = await resolve_and_queue(query, interaction.guild_id, interaction.user)
-    if not song:
+
+    data, error = await search_task
+    if data is None:
         embed = build_embed(
             title="❌ Canción no encontrada",
             description=(
@@ -2245,6 +2290,9 @@ async def play(interaction: discord.Interaction, query: str):
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
+
+    song = Song(data, interaction.user)
+    state.queue.append(song)
     
     # Registrar en logs
     record_log(
@@ -2622,6 +2670,90 @@ async def remove(interaction: discord.Interaction, posicion: int):
     )
     await interaction.followup.send(embed=embed)
 
+@bot.tree.command(name="quedate", description="📌 El bot se queda en el canal de voz sin desconectarse solo, hasta que uses /leavebot.")
+@app_commands.checks.cooldown(1, 5.0)
+async def quedate_cmd(interaction: discord.Interaction):
+    """Activa el modo 'quedate': el bot no se desconecta por inactividad."""
+    track_command(interaction.guild_id, "quedate")
+
+    # ✅ DEFER INMEDIATO
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    if not interaction.user.voice:
+        embed = build_embed(
+            title="🔇 No estás en un canal de voz",
+            description="Únete a un canal de voz primero.",
+            color=COLOR_WARN,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+
+    voice_client = await ensure_voice(interaction)
+    if not voice_client:
+        return
+
+    state = get_music_state(interaction.guild_id)
+    state.stay_connected = True
+
+    embed = build_embed(
+        title="📌 Modo quedate activado",
+        description=(
+            "El bot se va a quedar en este canal de voz aunque no haya música sonando "
+            "o se quede solo. No se desconecta hasta que uses `/leavebot`."
+        ),
+        color=COLOR_OK,
+    )
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="leavebot", description="👋 Saca al bot del canal de voz (cancela el modo /quedate).")
+@app_commands.checks.cooldown(1, 5.0)
+async def leavebot_cmd(interaction: discord.Interaction):
+    """Desconecta al bot del canal de voz y desactiva el modo /quedate."""
+    track_command(interaction.guild_id, "leavebot")
+
+    # ✅ DEFER INMEDIATO
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    state = get_music_state(interaction.guild_id)
+
+    if not state.voice_client:
+        embed = build_embed(
+            title="❌ El bot no está en un canal de voz",
+            color=COLOR_WARN,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+
+    # Detener y limpiar
+    if state.voice_client.is_playing():
+        state.voice_client.stop()
+    state.queue.clear()
+    state.current = None
+    state.is_paused = False
+    state.force_skip_loop = False
+    state.stay_connected = False
+
+    try:
+        await state.voice_client.disconnect()
+    except Exception:
+        pass
+    state.voice_client = None
+
+    record_log(interaction.guild_id, "musica", f"{interaction.user} sacó al bot del canal de voz (/leavebot)", str(interaction.user))
+
+    # Limpiar estado
+    if interaction.guild_id in music_states:
+        del music_states[interaction.guild_id]
+
+    embed = build_embed(
+        title="👋 Listo, me fui del canal de voz",
+        description="La cola se limpió y el modo `/quedate` se desactivó.",
+        color=COLOR_WARN,
+    )
+    await interaction.followup.send(embed=embed)
+
+
 @bot.tree.command(name="disconnect", description="🔌 Desconecta al bot del canal de voz.")
 @app_commands.checks.cooldown(1, 5.0)
 async def disconnect(interaction: discord.Interaction):
@@ -2647,6 +2779,7 @@ async def disconnect(interaction: discord.Interaction):
     state.queue.clear()
     state.current = None
     state.is_paused = False  # ✅ RESETEAR PAUSA
+    state.stay_connected = False  # ✅ cancelar también el modo /quedate
     
     try:
         await state.voice_client.disconnect()
