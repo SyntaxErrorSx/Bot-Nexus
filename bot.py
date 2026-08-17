@@ -1413,6 +1413,7 @@ HELP_CATEGORIES = {
         "description": "Reproduce música en canales de voz.",
         "commands": [
             ("/play", "Reproduce una canción por nombre o URL (YouTube/Spotify/SoundCloud)."),
+            ("/panel-play", "🎛️ Panel de música con botones (play/pausa, skip, stop, loop)."),
             ("/skip", "Salta a la siguiente canción de la cola."),
             ("/pause", "Pausa la reproducción actual."),
             ("/resume", "Reanuda la reproducción pausada."),
@@ -1647,6 +1648,175 @@ def format_ytdlp_error(error: str | None) -> str:
     return error[:500]
 
 
+LOOP_MODE_TEXTO = {"off": "Desactivado", "song": "🔂 Canción", "queue": "🔁 Cola"}
+
+
+def build_now_playing_embed(state: "GuildMusicState") -> discord.Embed:
+    """Embed grande y prolijo con la portada, nombre, tiempo y quién la pidió.
+    Se usa tanto en /play como en el panel de botones (/panel-play)."""
+    song = state.current
+    if not song:
+        return build_embed(
+            title="🎶 Panel de música",
+            description="No hay nada reproduciéndose ahora mismo. Usá `/play` para agregar una canción.",
+            color=COLOR_AMBER,
+        )
+
+    if song.duration:
+        elapsed = 0.0
+        if state.play_started_at and not state.is_paused:
+            elapsed = min(time.time() - state.play_started_at, song.duration)
+        progreso = create_progress_bar(elapsed, song.duration)
+    else:
+        progreso = "🔴 `EN VIVO`"
+
+    estado = "⏸️ Pausado" if state.is_paused else "▶️ Reproduciendo"
+
+    embed = build_embed(
+        title="🎶 Panel de música",
+        description=f"**[{song.title}]({song.webpage_url})**\n{progreso}",
+        color=COLOR_AMBER if state.is_paused else COLOR_OK,
+        image=song.thumbnail,
+        fields=[
+            ("Estado", estado, True),
+            ("⏱️ Duración", format_duration(song.duration), True),
+            ("🔁 Loop", LOOP_MODE_TEXTO.get(state.loop_mode, "Desactivado"), True),
+            ("🙋 Pedido por", getattr(song.requester, "mention", str(song.requester)), True),
+            ("👤 Canal/Artista", song.uploader, True),
+            ("📋 En cola", str(len(state.queue)), True),
+        ],
+        footer="Nexus Music",
+    )
+    return embed
+
+
+class MusicPanelView(discord.ui.View):
+    """Panel de música con botones: ▶️/⏸️ Play-Pausa, ⏭️ Skip, ⏹️ Stop, 🔁 Loop.
+    No es una vista persistente (no sobrevive a un reinicio del bot), lo cual
+    está bien porque el estado de música (cola, canción actual) tampoco
+    sobrevive a un reinicio: si el bot se reinicia hay que volver a pedir
+    música igual, así que no hace falta más complejidad acá."""
+
+    def __init__(self, guild_id: int):
+        super().__init__(timeout=None)
+        self.guild_id = guild_id
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        state = get_music_state(self.guild_id)
+        if state.is_paused:
+            self.play_pause_btn.emoji = "▶️"
+            self.play_pause_btn.style = discord.ButtonStyle.success
+        else:
+            self.play_pause_btn.emoji = "⏸️"
+            self.play_pause_btn.style = discord.ButtonStyle.primary
+
+        loop_emojis = {"off": "🔁", "song": "🔂", "queue": "🔁"}
+        self.loop_btn.emoji = loop_emojis.get(state.loop_mode, "🔁")
+        self.loop_btn.style = (
+            discord.ButtonStyle.success if state.loop_mode != "off" else discord.ButtonStyle.secondary
+        )
+
+    async def _misma_voz(self, interaction: discord.Interaction) -> bool:
+        """Sólo deja usar los botones a quien esté en el mismo canal de voz que el bot."""
+        state = get_music_state(self.guild_id)
+        member = interaction.user if isinstance(interaction.user, discord.Member) else None
+        en_canal = (
+            member and member.voice and state.voice_client
+            and member.voice.channel == state.voice_client.channel
+        )
+        if not en_canal:
+            await interaction.response.send_message(
+                embed=build_embed(
+                    title="🔇 Tenés que estar en el mismo canal de voz",
+                    description="Unite al canal donde está sonando la música para usar los controles.",
+                    color=COLOR_WARN,
+                ),
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(emoji="⏸️", style=discord.ButtonStyle.primary, row=0)
+    async def play_pause_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._misma_voz(interaction):
+            return
+        state = get_music_state(self.guild_id)
+        if not state.voice_client or not state.current:
+            return await interaction.response.send_message(
+                embed=build_embed(title="❌ No hay nada reproduciéndose", color=COLOR_WARN), ephemeral=True
+            )
+        if state.is_paused:
+            state.voice_client.resume()
+            state.is_paused = False
+        else:
+            state.voice_client.pause()
+            state.is_paused = True
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=build_now_playing_embed(state), view=self)
+
+    @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary, row=0)
+    async def skip_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._misma_voz(interaction):
+            return
+        state = get_music_state(self.guild_id)
+        if not state.is_playing() or not state.current:
+            return await interaction.response.send_message(
+                embed=build_embed(title="❌ No hay canción reproduciéndose", color=COLOR_WARN), ephemeral=True
+            )
+        record_log(self.guild_id, "musica", f"{interaction.user} saltó la canción (panel): {state.current.title}", str(interaction.user))
+        state.force_skip_loop = True
+        state.voice_client.stop()
+        await interaction.response.send_message(embed=build_embed(title="⏭️ Canción saltada", color=COLOR_AMBER), ephemeral=True)
+
+    @discord.ui.button(emoji="⏹️", style=discord.ButtonStyle.danger, row=0)
+    async def stop_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._misma_voz(interaction):
+            return
+        state = get_music_state(self.guild_id)
+        if not state.voice_client:
+            return await interaction.response.send_message(
+                embed=build_embed(title="❌ No hay música reproduciéndose", color=COLOR_WARN), ephemeral=True
+            )
+        if state.voice_client.is_playing():
+            state.voice_client.stop()
+        state.queue.clear()
+        state.current = None
+        state.is_paused = False
+        state.force_skip_loop = False
+        try:
+            await state.voice_client.disconnect()
+        except Exception:
+            pass
+        state.voice_client = None
+        if self.guild_id in music_states:
+            del music_states[self.guild_id]
+
+        record_log(self.guild_id, "musica", f"{interaction.user} detuvo la música (panel)", str(interaction.user))
+
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            embed=build_embed(
+                title="⏹️ Música detenida",
+                description="La cola se limpió y el bot se desconectó del canal de voz.",
+                color=COLOR_WARN,
+            ),
+            view=self,
+        )
+        self.stop()
+
+    @discord.ui.button(emoji="🔁", style=discord.ButtonStyle.secondary, row=0)
+    async def loop_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._misma_voz(interaction):
+            return
+        state = get_music_state(self.guild_id)
+        orden = ["off", "song", "queue"]
+        state.loop_mode = orden[(orden.index(state.loop_mode) + 1) % len(orden)]
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=build_now_playing_embed(state), view=self)
+
+
 class Song:
     """Representa una canción resuelta por yt-dlp, lista para encolar."""
 
@@ -1657,6 +1827,14 @@ class Song:
         self.thumbnail = data.get("thumbnail")
         self.uploader: str = data.get("uploader", "Desconocido")
         self.requester = requester
+        # ⚡ OPTIMIZACIÓN DE VELOCIDAD: al encolar la canción, yt-dlp ya nos dio
+        # la URL de streaming directa (data["url"]). Antes, cuando le tocaba el
+        # turno a la canción, _play_next_locked() volvía a llamar a yt-dlp para
+        # pedir exactamente lo mismo, duplicando el tiempo de espera (1-3s extra
+        # por canción). Ahora guardamos esa URL acá y la reusamos si sigue
+        # "fresca"; sólo se vuelve a pedir si expiró o si nunca se obtuvo.
+        self.stream_url: str | None = data.get("url")
+        self.stream_url_fetched_at: float = time.time()
 
 
 class GuildMusicState:
@@ -1683,6 +1861,12 @@ class GuildMusicState:
     def is_playing(self) -> bool:
         return bool(self.voice_client and (self.voice_client.is_playing() or self.voice_client.is_paused()))
 
+
+# Las URLs de streaming que entrega YouTube suelen durar varias horas antes de
+# expirar. Usamos un margen conservador: si la canción esperó menos que esto
+# en la cola, reproducimos directo con la URL ya resuelta (sin volver a
+# consultar yt-dlp). Si esperó más, se vuelve a resolver por seguridad.
+STREAM_URL_MAX_AGE = 3 * 3600  # 3 horas
 
 music_states: dict[int, GuildMusicState] = {}
 
@@ -1739,29 +1923,43 @@ async def _play_next_locked(guild_id: int) -> None:
     if not state.voice_client or not state.voice_client.is_connected():
         return
 
-    data, error = await ytdl_extract(next_song.webpage_url)
-    if data is None:
-        if state.text_channel:
-            try:
-                await state.text_channel.send(embed=build_embed(
-                    title="⚠️ No se pudo reproducir una canción",
-                    description=(
-                        f"Se saltó **{next_song.title}** por un error al obtener el audio.\n"
-                        f"```{format_ytdlp_error(error)}```"
-                    ),
-                    color=COLOR_WARN,
-                ))
-            except Exception:
-                pass
-        await _play_next_locked(guild_id)
-        return
+    # ⚡ Si la URL de streaming ya resuelta sigue fresca, la reusamos directo
+    # y nos ahorramos otra consulta a yt-dlp (esto es lo que hacía sentir
+    # lento el "empiece" de cada canción). Si expiró o nunca se obtuvo,
+    # volvemos a resolverla como antes.
+    stream_url_age = time.time() - next_song.stream_url_fetched_at
+    if next_song.stream_url and stream_url_age < STREAM_URL_MAX_AGE:
+        stream_url = next_song.stream_url
+    else:
+        data, error = await ytdl_extract(next_song.webpage_url)
+        if data is None:
+            if state.text_channel:
+                try:
+                    await state.text_channel.send(embed=build_embed(
+                        title="⚠️ No se pudo reproducir una canción",
+                        description=(
+                            f"Se saltó **{next_song.title}** por un error al obtener el audio.\n"
+                            f"```{format_ytdlp_error(error)}```"
+                        ),
+                        color=COLOR_WARN,
+                    ))
+                except Exception:
+                    pass
+            await _play_next_locked(guild_id)
+            return
 
-    stream_url = data.get("url")
+        stream_url = data.get("url")
+        next_song.stream_url = stream_url
+        next_song.stream_url_fetched_at = time.time()
+
     try:
         source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
         source = discord.PCMVolumeTransformer(source, volume=state.volume)
     except Exception as e:
         print(f"Error creando la fuente de audio: {e}")
+        # La URL cacheada puede haber fallado (p.ej. expiró antes de tiempo);
+        # forzamos una re-resolución en el próximo intento.
+        next_song.stream_url = None
         await _play_next_locked(guild_id)
         return
 
@@ -1779,20 +1977,11 @@ async def _play_next_locked(guild_id: int) -> None:
     state.is_paused = False  # ✅ ACTUALIZAR
 
     if state.text_channel:
-        embed = build_embed(
-            title="🎶 Reproduciendo ahora",
-            description=f"[{next_song.title}]({next_song.webpage_url})",
-            color=COLOR_OK,
-            thumbnail=next_song.thumbnail,
-            fields=[
-                ("⏱️ Duración", format_duration(next_song.duration), True),
-                ("🙋 Pedido por", getattr(next_song.requester, "mention", str(next_song.requester)), True),
-                ("📋 En cola", str(len(state.queue)), True),
-            ],
-            footer="Nexus Music",
-        )
         try:
-            await state.text_channel.send(embed=embed)
+            await state.text_channel.send(
+                embed=build_now_playing_embed(state),
+                view=MusicPanelView(guild_id),
+            )
         except Exception:
             pass
 
@@ -2283,29 +2472,24 @@ async def nowplaying(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
     
-    song = state.current
-    
-    # Calcular progreso
-    progress = "🔴 En vivo"
-    if state.play_started_at and song.duration:
-        elapsed = time.time() - state.play_started_at
-        if elapsed < song.duration:
-            progress = create_progress_bar(elapsed, song.duration)
-    
-    embed = build_embed(
-        title="🎵 Reproduciendo ahora",
-        color=COLOR_OK,
-        thumbnail=song.thumbnail,
-        fields=[
-            ("📝 Canción", f"[{song.title}]({song.webpage_url})", False),
-            ("⏱️ Progreso", progress, False),
-            ("👤 Subido por", song.uploader, True),
-            ("⏱️ Duración", format_duration(song.duration), True),
-            ("🙋 Pedido por", getattr(song.requester, "mention", str(song.requester)), True),
-        ],
-        footer=f"Volumen: {int(state.volume * 100)}% | {len(state.queue)} canciones en cola",
-    )
+    embed = build_now_playing_embed(state)
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="panel-play", description="🎶 Muestra el panel de música con botones (play/pausa, skip, stop, loop).")
+@app_commands.checks.cooldown(1, 3.0)
+async def panel_play_cmd(interaction: discord.Interaction):
+    """Publica el panel de control de música con botones."""
+    track_command(interaction.guild_id, "panel-play")
+    await interaction.response.defer(thinking=True)
+
+    state = get_music_state(interaction.guild_id)
+    embed = build_now_playing_embed(state)
+
+    if state.current:
+        await interaction.followup.send(embed=embed, view=MusicPanelView(interaction.guild_id))
+    else:
+        await interaction.followup.send(embed=embed)
 
 
 @bot.tree.command(name="volume", description="🔊 Ajusta el volumen de la música.")
