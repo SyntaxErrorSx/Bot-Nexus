@@ -18,6 +18,9 @@ import re
 from datetime import datetime, timedelta
 
 import yt_dlp
+from PIL import Image, ImageDraw, ImageFont
+import string
+import io
 
 load_dotenv()
 
@@ -98,6 +101,15 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 BOT_START_TIME = time.time()
 
 # ──────────────────────────────────────────────────────────────
+#  ESTADO EN MEMORIA (no persiste al reiniciar, es intencional)
+# ──────────────────────────────────────────────────────────────
+
+afk_users: dict[int, dict] = {}            # user_id -> {"reason": str, "since": datetime}
+spam_tracker: dict[int, list] = {}          # user_id -> [timestamps recientes]
+pending_captchas: dict[int, dict] = {}      # user_id -> {"code", "guild_id", "level", "attempts", "expires"}
+active_reminders: dict[int, int] = {}       # solo para trackear cantidad, opcional
+
+# ──────────────────────────────────────────────────────────────
 #  PERSISTENCIA
 # ──────────────────────────────────────────────────────────────
 
@@ -121,6 +133,15 @@ DEFAULT_GUILD_CONFIG = {
     "farewell_channel": None,
     "farewell_message": "**{username}** ha abandonado el servidor. Ahora somos **{membercount}** miembros. 👋",
     "farewell_banner": None,
+    "autorole_id": None,
+    "antilink_enabled": False,
+    "antispam_enabled": False,
+    "suggestions_channel": None,
+    "verify_enabled": False,
+    "verify_role_id": None,
+    "verify_unverified_role_id": None,
+    "verify_level": 1,
+    "verify_channel_id": None,
 }
 
 
@@ -637,6 +658,149 @@ def clear_warns(guild_id: int, user_id: int) -> int:
         del data[key]
         save_warns(data)
     return count
+
+
+def remove_warn(guild_id: int, user_id: int, index: int) -> dict | None:
+    """Elimina una advertencia puntual (1-indexed, como se muestra en /warnings). Devuelve la entrada borrada o None."""
+    data = load_warns()
+    key = f"{guild_id}_{user_id}"
+    entries = data.get(key, [])
+    if index < 1 or index > len(entries):
+        return None
+    removed = entries.pop(index - 1)
+    data[key] = entries
+    save_warns(data)
+    return removed
+
+
+def parse_duration_to_seconds(duration: str) -> int | None:
+    """Convierte '10m', '2h', '1d', '1w' en segundos. Devuelve None si el formato es inválido."""
+    duration = duration.strip()
+    if not duration or len(duration) < 2:
+        return None
+    unit = duration[-1]
+    try:
+        value = int(duration[:-1])
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    if unit not in multipliers:
+        return None
+    return value * multipliers[unit]
+
+
+def format_seconds(seconds: int) -> str:
+    """Formatea segundos en un texto legible tipo '1h 20m'."""
+    parts = []
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if seconds and not days:
+        parts.append(f"{seconds}s")
+    return " ".join(parts) if parts else "0s"
+
+
+# ──────────────────────────────────────────────────────────────
+#  CAPTCHA (sistema de verificación)
+# ──────────────────────────────────────────────────────────────
+
+def generate_captcha_code(level: int) -> str:
+    """Genera el código del captcha según el nivel de dificultad (1=fácil, 3=difícil)."""
+    if level >= 3:
+        length = 7
+        chars = string.ascii_uppercase + string.digits  # incluye caracteres parecidos, más difícil
+    elif level == 2:
+        length = 6
+        chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # sin O/0, I/1 para que sea legible
+    else:
+        length = 4
+        chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(random.choices(chars, k=length))
+
+
+def generate_captcha_image(code: str, level: int) -> io.BytesIO:
+    """Genera una imagen PNG tipo captcha con ruido/distorsión según el nivel."""
+    scale = 4
+    char_w, char_h = 26, 38
+    small_w = char_w * len(code) + 24
+    small_h = char_h + 24
+
+    img = Image.new("RGB", (small_w, small_h), color=(240, 242, 250))
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.load_default()
+
+    # Líneas de ruido de fondo (más líneas = más difícil)
+    noise_lines = {1: 3, 2: 7, 3: 12}.get(level, 6)
+    for _ in range(noise_lines):
+        x1, y1 = random.randint(0, small_w), random.randint(0, small_h)
+        x2, y2 = random.randint(0, small_w), random.randint(0, small_h)
+        draw.line([(x1, y1), (x2, y2)], fill=tuple(random.randint(160, 205) for _ in range(3)), width=1)
+
+    # Dibujar cada carácter con rotación/posición aleatoria (nivel 2-3)
+    x = 12
+    for ch in code:
+        y = random.randint(4, 16) if level >= 2 else 10
+        color = tuple(random.randint(15, 90) for _ in range(3))
+        char_img = Image.new("RGBA", (char_w, char_h), (0, 0, 0, 0))
+        cdraw = ImageDraw.Draw(char_img)
+        cdraw.text((4, 4), ch, font=font, fill=color + (255,))
+        if level >= 2:
+            angle = random.randint(-15 * level, 15 * level)
+            char_img = char_img.rotate(angle, expand=True, resample=Image.BICUBIC)
+        img.paste(char_img, (x, y), char_img)
+        x += char_w + (4 if level >= 3 else 0)
+
+    # Puntos de ruido (más ruido en niveles altos)
+    noise_dots = {1: 25, 2: 90, 3: 180}.get(level, 90)
+    for _ in range(noise_dots):
+        px, py = random.randint(0, small_w - 1), random.randint(0, small_h - 1)
+        draw.point((px, py), fill=tuple(random.randint(150, 210) for _ in range(3)))
+
+    final_w = min(small_w * scale, 500)
+    final_h = int(small_h * (final_w / small_w))
+    img = img.resize((final_w, final_h), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
+def generate_math_question() -> tuple[str, str]:
+    """Genera una pregunta matemática simple para el captcha nivel 1. Devuelve (pregunta, respuesta)."""
+    a, b = random.randint(1, 20), random.randint(1, 20)
+    op = random.choice(["+", "-", "×"])
+    if op == "+":
+        result = a + b
+    elif op == "-":
+        a, b = max(a, b), min(a, b)  # evitar negativos
+        result = a - b
+    else:
+        a, b = random.randint(1, 9), random.randint(1, 9)
+        result = a * b
+    return f"¿Cuánto es {a} {op} {b}?", str(result)
+
+
+async def apply_verification(member: discord.Member, cfg: dict) -> bool:
+    """Aplica el rol verificado y remueve el de no verificado. Devuelve True si funcionó."""
+    try:
+        verified_role = member.guild.get_role(int(cfg["verify_role_id"])) if cfg.get("verify_role_id") else None
+        unverified_role = member.guild.get_role(int(cfg["verify_unverified_role_id"])) if cfg.get("verify_unverified_role_id") else None
+        if verified_role:
+            await member.add_roles(verified_role, reason="Verificación completada")
+        if unverified_role and unverified_role in member.roles:
+            await member.remove_roles(unverified_role, reason="Verificación completada")
+        return True
+    except discord.Forbidden:
+        return False
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1662,7 +1826,14 @@ async def on_ready():
         print("✅ Comandos sincronizados forzadamente")
     except Exception as e:
         print(f"❌ Error en sincronización forzada: {e}")
-        
+
+    # Registrar vistas persistentes (botones que sobreviven a un reinicio)
+    try:
+        bot.add_view(VerifyPanelView())
+        print("✅ Vista persistente de verificación registrada")
+    except Exception as e:
+        print(f"❌ Error registrando vistas persistentes: {e}")
+
     # Restaurar canales bloqueados
     data = load_blocked_channels()
     for guild_id_str, channels_data in data.items():
@@ -2210,6 +2381,25 @@ async def on_member_join(member: discord.Member):
     cfg = get_guild_config(member.guild.id)
     bump_stat(member.guild.id, "joins")
     record_log(member.guild.id, "bienvenidas", f"{member} se unió al servidor.", str(member))
+
+    # Autorole
+    autorole_id = cfg.get("autorole_id")
+    if autorole_id:
+        role = member.guild.get_role(int(autorole_id))
+        if role:
+            try:
+                await member.add_roles(role, reason="Autorole al unirse")
+            except:
+                pass
+
+    # Verificación: asigna el rol de "no verificados" automáticamente
+    if cfg.get("verify_enabled") and cfg.get("verify_unverified_role_id"):
+        unverified_role = member.guild.get_role(int(cfg["verify_unverified_role_id"]))
+        if unverified_role:
+            try:
+                await member.add_roles(unverified_role, reason="Pendiente de verificación")
+            except:
+                pass
 
     if not cfg.get("welcome_enabled"):
         return
@@ -6162,6 +6352,70 @@ async def on_message(message: discord.Message):
             except:
                 pass
             return
+
+        guild_cfg = get_guild_config(message.guild.id)
+
+        # ------------------
+        # ANTILINK
+        # ------------------
+        if guild_cfg.get("antilink_enabled") and not message.author.guild_permissions.manage_messages:
+            if re.search(r"(https?://|discord\.gg/|www\.)\S+", message.content, re.IGNORECASE):
+                try:
+                    await message.delete()
+                    warning = await message.channel.send(
+                        f"🔗 {message.author.mention}, no se permiten links en este servidor.",
+                        delete_after=6
+                    )
+                except:
+                    pass
+                record_log(message.guild.id, "moderacion", f"Antilink: mensaje de {message.author} eliminado (contenía un link)", "Sistema")
+                return
+
+        # ------------------
+        # ANTISPAM (5 mensajes en 5 segundos = timeout corto)
+        # ------------------
+        if guild_cfg.get("antispam_enabled") and not message.author.guild_permissions.manage_messages:
+            now_ts = time.time()
+            history = spam_tracker.setdefault(message.author.id, [])
+            history.append(now_ts)
+            spam_tracker[message.author.id] = [t for t in history if now_ts - t <= 5]
+
+            if len(spam_tracker[message.author.id]) >= 5:
+                spam_tracker[message.author.id] = []
+                try:
+                    await message.author.timeout(timedelta(minutes=5), reason="Antispam: envío de mensajes en ráfaga")
+                    await message.channel.send(
+                        embed=build_embed(
+                            title="🚫 Antispam activado",
+                            description=f"{message.author.mention} fue silenciado 5 minutos por mandar mensajes muy rápido.",
+                            color=COLOR_WARN
+                        )
+                    )
+                    record_log(message.guild.id, "moderacion", f"Antispam: {message.author} silenciado 5m por spam", "Sistema")
+                except:
+                    pass
+
+        # ------------------
+        # AFK
+        # ------------------
+        if message.author.id in afk_users:
+            del afk_users[message.author.id]
+            try:
+                await message.channel.send(f"👋 {message.author.mention}, te quité el estado AFK.", delete_after=5)
+            except:
+                pass
+
+        if message.mentions:
+            for mentioned in message.mentions:
+                if mentioned.id in afk_users:
+                    info = afk_users[mentioned.id]
+                    try:
+                        await message.channel.send(
+                            f"💤 **{mentioned.display_name}** está AFK: {info['reason']}",
+                            delete_after=8
+                        )
+                    except:
+                        pass
     
     # Procesar comandos normalmente
     await bot.process_commands(message)
@@ -6319,6 +6573,173 @@ async def softban_cmd(interaction: discord.Interaction, usuario: discord.Member,
     )
     await interaction.response.send_message(embed=embed)
     record_log(interaction.guild_id, "Softban", f"{usuario} softbaneado por: {razon}", str(interaction.user))
+
+
+@bot.tree.command(name="timeout", description="🔇 Silencia a un usuario con el timeout nativo de Discord.")
+@app_commands.describe(usuario="Usuario a silenciar", duracion="Duración: 10m, 2h, 1d, 1w (máx. 28d)", razon="Razón del timeout")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def timeout_cmd(interaction: discord.Interaction, usuario: discord.Member, duracion: str, razon: str = "No especificada"):
+    if usuario.id == Config.OWNER_ID:
+        return await interaction.response.send_message(embed=build_embed(title="Error", description="No puedo silenciar al Owner.", color=Config.COLOR_ERROR), ephemeral=True)
+
+    seconds = parse_duration_to_seconds(duracion)
+    if seconds is None:
+        embed = build_embed(title="❌ Duración inválida", description="Usá un formato como `10m`, `2h`, `1d` o `1w`.", color=Config.COLOR_ERROR)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+    if seconds > 28 * 86400:
+        embed = build_embed(title="❌ Duración inválida", description="El timeout nativo de Discord tiene un máximo de 28 días.", color=Config.COLOR_ERROR)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    try:
+        await usuario.timeout(timedelta(seconds=seconds), reason=f"{razon} — por {interaction.user}")
+    except discord.Forbidden:
+        embed = build_embed(title="❌ Error", description="No tengo permisos suficientes para silenciar a este usuario.", color=Config.COLOR_ERROR)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    try:
+        await usuario.send(embed=build_embed(
+            title="🔇 Has sido silenciado",
+            description=f"Fuiste silenciado en **{interaction.guild.name}** por **{format_seconds(seconds)}**.",
+            color=Config.COLOR_WARNING,
+            fields=[("📋 Razón", razon, False)]
+        ))
+    except:
+        pass
+
+    embed = build_embed(
+        title="🔇 Timeout aplicado",
+        description=f"{usuario.mention} fue silenciado por **{format_seconds(seconds)}**.",
+        color=Config.COLOR_SUCCESS,
+        fields=[("Razón", razon, False)]
+    )
+    await interaction.response.send_message(embed=embed)
+    record_log(interaction.guild_id, "Timeout", f"{usuario} silenciado {format_seconds(seconds)} por: {razon}", str(interaction.user))
+
+
+@bot.tree.command(name="untimeout", description="🔊 Quita el timeout nativo a un usuario.")
+@app_commands.describe(usuario="Usuario a des-silenciar")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def untimeout_cmd(interaction: discord.Interaction, usuario: discord.Member):
+    try:
+        await usuario.timeout(None, reason=f"Timeout removido por {interaction.user}")
+    except discord.Forbidden:
+        embed = build_embed(title="❌ Error", description="No tengo permisos suficientes.", color=Config.COLOR_ERROR)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    embed = build_embed(title="🔊 Timeout removido", description=f"Se le quitó el timeout a {usuario.mention}.", color=Config.COLOR_SUCCESS)
+    await interaction.response.send_message(embed=embed)
+    record_log(interaction.guild_id, "Untimeout", f"Timeout removido a {usuario}", str(interaction.user))
+
+
+@bot.tree.command(name="unwarn", description="🗑️ Elimina una advertencia puntual de un usuario.")
+@app_commands.describe(usuario="Usuario", numero="Número de la advertencia (ver con /warnings)")
+@app_commands.checks.has_permissions(kick_members=True)
+async def unwarn_cmd(interaction: discord.Interaction, usuario: discord.Member, numero: app_commands.Range[int, 1, 999]):
+    removed = remove_warn(interaction.guild_id, usuario.id, numero)
+    if removed is None:
+        embed = build_embed(title="❌ No encontrada", description=f"No existe la advertencia #{numero} para {usuario.mention}. Revisá con `/warnings`.", color=Config.COLOR_ERROR)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    embed = build_embed(
+        title="🗑️ Advertencia eliminada",
+        description=f"Se eliminó la advertencia #{numero} de {usuario.mention}.",
+        color=Config.COLOR_SUCCESS,
+        fields=[("Razón original", removed.get("reason", "?"), False)]
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    record_log(interaction.guild_id, "Unwarn", f"Se eliminó la advertencia #{numero} de {usuario}", str(interaction.user))
+
+
+@bot.tree.command(name="role", description="🎭 Agrega o quita un rol a un usuario.")
+@app_commands.describe(usuario="Usuario a modificar", rol="Rol a agregar o quitar", accion="Agregar o quitar")
+@app_commands.choices(accion=[
+    app_commands.Choice(name="Agregar", value="add"),
+    app_commands.Choice(name="Quitar", value="remove"),
+])
+@app_commands.checks.has_permissions(manage_roles=True)
+async def role_cmd(interaction: discord.Interaction, usuario: discord.Member, rol: discord.Role, accion: app_commands.Choice[str]):
+    if rol >= interaction.guild.me.top_role:
+        embed = build_embed(title="❌ Error", description=f"No puedo gestionar el rol {rol.mention} porque está por encima de mi rol más alto.", color=Config.COLOR_ERROR)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    try:
+        if accion.value == "add":
+            await usuario.add_roles(rol, reason=f"Agregado por {interaction.user}")
+            desc = f"Se agregó el rol {rol.mention} a {usuario.mention}."
+        else:
+            await usuario.remove_roles(rol, reason=f"Removido por {interaction.user}")
+            desc = f"Se quitó el rol {rol.mention} a {usuario.mention}."
+    except discord.Forbidden:
+        embed = build_embed(title="❌ Error", description="No tengo permisos suficientes para gestionar ese rol.", color=Config.COLOR_ERROR)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    embed = build_embed(title="🎭 Rol actualizado", description=desc, color=Config.COLOR_SUCCESS)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    record_log(interaction.guild_id, "Role", desc, str(interaction.user))
+
+
+@bot.tree.command(name="modstats", description="📈 Ranking de acciones de moderación por moderador.")
+@app_commands.checks.has_permissions(kick_members=True)
+async def modstats_cmd(interaction: discord.Interaction):
+    entries = get_logs(interaction.guild_id)
+    conteo = Counter()
+    for e in entries:
+        autor = e.get("autor")
+        if autor:
+            conteo[autor] += 1
+
+    if not conteo:
+        embed = build_embed(title="📈 Sin datos", description="Todavía no hay acciones registradas en los logs.", color=COLOR_WARN)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    top = conteo.most_common(10)
+    medallas = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, (autor, cantidad) in enumerate(top):
+        medalla = medallas[i] if i < 3 else f"`#{i+1}`"
+        lines.append(f"{medalla} **{autor}** — {cantidad} acción(es)")
+
+    embed = build_embed(
+        title="📈 Ranking de moderación",
+        description="\n".join(lines),
+        color=COLOR_PURPLE,
+        footer=f"Basado en los últimos {len(entries)} registros de log"
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="antilink", description="🔗 Activa o desactiva el borrado automático de links.")
+@app_commands.describe(estado="Activar o desactivar")
+@app_commands.choices(estado=[
+    app_commands.Choice(name="Activar", value="on"),
+    app_commands.Choice(name="Desactivar", value="off"),
+])
+@app_commands.checks.has_permissions(administrator=True)
+async def antilink_cmd(interaction: discord.Interaction, estado: app_commands.Choice[str]):
+    cfg = get_guild_config(interaction.guild_id)
+    cfg["antilink_enabled"] = (estado.value == "on")
+    update_guild_config(interaction.guild_id, cfg)
+
+    desc = "Ahora se eliminarán automáticamente los mensajes con links de usuarios sin permisos de gestión de mensajes." if cfg["antilink_enabled"] else "El borrado automático de links fue desactivado."
+    embed = build_embed(title="🔗 Antilink actualizado", description=desc, color=Config.COLOR_SUCCESS)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="antispam", description="🚫 Activa o desactiva la protección antispam.")
+@app_commands.describe(estado="Activar o desactivar")
+@app_commands.choices(estado=[
+    app_commands.Choice(name="Activar", value="on"),
+    app_commands.Choice(name="Desactivar", value="off"),
+])
+@app_commands.checks.has_permissions(administrator=True)
+async def antispam_cmd(interaction: discord.Interaction, estado: app_commands.Choice[str]):
+    cfg = get_guild_config(interaction.guild_id)
+    cfg["antispam_enabled"] = (estado.value == "on")
+    update_guild_config(interaction.guild_id, cfg)
+
+    desc = "Ahora se detectará y silenciará automáticamente a quien mande mensajes repetidos muy rápido (5 en 5s)." if cfg["antispam_enabled"] else "La protección antispam fue desactivada."
+    embed = build_embed(title="🚫 Antispam actualizado", description=desc, color=Config.COLOR_SUCCESS)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -6506,6 +6927,437 @@ async def set_trap_channel(interaction: discord.Interaction, canal: discord.Text
     update_guild_config(interaction.guild_id, guild_cfg)
     embed = build_embed(title="Canal Trampa Configurado", description=f"El canal {canal.mention} ahora es una trampa. Cualquier usuario que escriba ahí será baneado. 🥀", color=Config.COLOR_SUCCESS)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ──────────────────────────────────────────────────────────────
+#  COMUNIDAD: /recordatorio, /afk, /sugerencia
+# ──────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="recordatorio", description="⏰ El bot te recuerda algo después de un tiempo.")
+@app_commands.describe(tiempo="Ej: 10m, 2h, 1d", texto="Qué querés que te recuerde")
+async def recordatorio_cmd(interaction: discord.Interaction, tiempo: str, texto: str):
+    seconds = parse_duration_to_seconds(tiempo)
+    if seconds is None or seconds > 7 * 86400:
+        embed = build_embed(title="❌ Tiempo inválido", description="Usá un formato como `10m`, `2h`, `1d` (máximo 7 días).", color=COLOR_WARN)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    embed = build_embed(
+        title="⏰ Recordatorio guardado",
+        description=f"Te voy a avisar en **{format_seconds(seconds)}**.",
+        color=COLOR_OK,
+        fields=[("📝 Texto", texto[:200], False)]
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def wait_and_remind():
+        await asyncio.sleep(seconds)
+        recordatorio_embed = build_embed(
+            title="⏰ ¡Recordatorio!",
+            description=texto,
+            color=COLOR_AMBER,
+            footer="Pediste que te avisara esto"
+        )
+        try:
+            await interaction.user.send(embed=recordatorio_embed)
+        except:
+            try:
+                await interaction.channel.send(content=interaction.user.mention, embed=recordatorio_embed)
+            except:
+                pass
+
+    asyncio.create_task(wait_and_remind())
+
+
+@bot.tree.command(name="afk", description="💤 Marcate como AFK. El bot avisa si te mencionan.")
+@app_commands.describe(razon="Motivo (opcional)")
+async def afk_cmd(interaction: discord.Interaction, razon: str = "Sin especificar"):
+    afk_users[interaction.user.id] = {"reason": razon, "since": datetime.now(timezone.utc)}
+    embed = build_embed(
+        title="💤 Modo AFK activado",
+        description=f"Te marqué como AFK. Apenas escribas de nuevo se te quita automáticamente.",
+        color=COLOR_MAIN,
+        fields=[("Razón", razon, False)]
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="sugerencia", description="💡 Manda una sugerencia al buzón del servidor.")
+@app_commands.describe(texto="Tu sugerencia")
+async def sugerencia_cmd(interaction: discord.Interaction, texto: str):
+    cfg = get_guild_config(interaction.guild_id)
+    channel_id = cfg.get("suggestions_channel")
+    channel = interaction.guild.get_channel(int(channel_id)) if channel_id else interaction.channel
+
+    if not channel:
+        embed = build_embed(title="❌ Error", description="No se encontró el canal de sugerencias configurado.", color=COLOR_WARN)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    embed = build_embed(
+        title="💡 Nueva sugerencia",
+        description=texto,
+        color=COLOR_PURPLE,
+        author_name=str(interaction.user),
+        author_icon=interaction.user.display_avatar.url,
+        footer=f"Sugerido por {interaction.user.id}"
+    )
+    msg = await channel.send(embed=embed)
+    try:
+        await msg.add_reaction("👍")
+        await msg.add_reaction("👎")
+    except:
+        pass
+
+    confirm = build_embed(title="✅ Sugerencia enviada", description=f"Tu sugerencia se publicó en {channel.mention}.", color=COLOR_OK)
+    await interaction.response.send_message(embed=confirm, ephemeral=True)
+    record_log(interaction.guild_id, "moderacion", f"{interaction.user} envió una sugerencia: {texto[:60]}", str(interaction.user))
+
+
+@bot.tree.command(name="config-sugerencias", description="[Admin] Configura el canal donde caen las sugerencias.")
+@app_commands.describe(canal="Canal para las sugerencias")
+@app_commands.checks.has_permissions(administrator=True)
+async def config_sugerencias_cmd(interaction: discord.Interaction, canal: discord.TextChannel):
+    cfg = get_guild_config(interaction.guild_id)
+    cfg["suggestions_channel"] = canal.id
+    update_guild_config(interaction.guild_id, cfg)
+    embed = build_embed(title="💡 Canal configurado", description=f"Las sugerencias ahora se publican en {canal.mention}.", color=COLOR_OK)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ──────────────────────────────────────────────────────────────
+#  AUTOROLE
+# ──────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="autorole", description="[Admin] Configura el rol automático al unirse alguien.")
+@app_commands.describe(rol="Rol a asignar automáticamente (dejar vacío para desactivar)")
+@app_commands.checks.has_permissions(administrator=True)
+async def autorole_cmd(interaction: discord.Interaction, rol: discord.Role | None = None):
+    cfg = get_guild_config(interaction.guild_id)
+    cfg["autorole_id"] = rol.id if rol else None
+    update_guild_config(interaction.guild_id, cfg)
+
+    if rol:
+        embed = build_embed(title="🎭 Autorole configurado", description=f"Cada nuevo miembro recibirá el rol {rol.mention} automáticamente.", color=COLOR_OK)
+    else:
+        embed = build_embed(title="🎭 Autorole desactivado", description="Ya no se asignará ningún rol automático.", color=COLOR_WARN)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ──────────────────────────────────────────────────────────────
+#  GIVEAWAYS (/giveaway)
+# ──────────────────────────────────────────────────────────────
+
+class GiveawayView(discord.ui.View):
+    """Vista con botón para participar en un sorteo."""
+
+    def __init__(self, prize: str, winners_count: int, host_id: int):
+        super().__init__(timeout=None)
+        self.prize = prize
+        self.winners_count = winners_count
+        self.host_id = host_id
+        self.participants: set[int] = set()
+
+    @discord.ui.button(label="🎉 Participar (0)", style=discord.ButtonStyle.success, custom_id="giveaway_join")
+    async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id in self.participants:
+            self.participants.discard(interaction.user.id)
+            await interaction.response.send_message("❌ Saliste del sorteo.", ephemeral=True)
+        else:
+            self.participants.add(interaction.user.id)
+            await interaction.response.send_message("✅ ¡Ya estás participando!", ephemeral=True)
+
+        button.label = f"🎉 Participar ({len(self.participants)})"
+        try:
+            await interaction.message.edit(view=self)
+        except:
+            pass
+
+    async def finish(self, message: discord.Message):
+        for child in self.children:
+            child.disabled = True
+
+        if not self.participants:
+            embed = build_embed(
+                title="🎁 Sorteo finalizado",
+                description=f"**{self.prize}**\n\nNadie participó, no hay ganador. 😔",
+                color=COLOR_WARN
+            )
+            await message.edit(embed=embed, view=self)
+            return
+
+        winners = random.sample(list(self.participants), min(self.winners_count, len(self.participants)))
+        mentions = ", ".join(f"<@{w}>" for w in winners)
+
+        embed = build_embed(
+            title="🎁 Sorteo finalizado",
+            description=f"**{self.prize}**\n\n🏆 Ganador(es): {mentions}",
+            color=COLOR_OK,
+            footer=f"{len(self.participants)} participante(s) en total"
+        )
+        await message.edit(embed=embed, view=self)
+        try:
+            await message.reply(f"🎉 ¡Felicidades {mentions}! Ganaste **{self.prize}**.")
+        except:
+            pass
+
+
+@bot.tree.command(name="giveaway", description="🎁 Inicia un sorteo en el canal actual.")
+@app_commands.describe(premio="Qué se sortea", duracion="Duración: 10m, 1h, 1d", ganadores="Cantidad de ganadores")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def giveaway_cmd(interaction: discord.Interaction, premio: str, duracion: str, ganadores: app_commands.Range[int, 1, 20] = 1):
+    seconds = parse_duration_to_seconds(duracion)
+    if seconds is None or seconds > 30 * 86400:
+        embed = build_embed(title="❌ Duración inválida", description="Usá un formato como `10m`, `1h`, `1d` (máx. 30 días).", color=COLOR_WARN)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    view = GiveawayView(premio, ganadores, interaction.user.id)
+    ends_at = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+
+    embed = build_embed(
+        title="🎁 ¡Nuevo sorteo!",
+        description=f"**{premio}**\n\nHacé clic en 🎉 **Participar** para entrar.",
+        color=COLOR_PURPLE,
+        fields=[
+            ("🏆 Ganadores", str(ganadores), True),
+            ("⏰ Finaliza", f"<t:{int(ends_at.timestamp())}:R>", True),
+        ],
+        footer=f"Organizado por {interaction.user.display_name}"
+    )
+    await interaction.response.send_message(embed=embed, view=view)
+    message = await interaction.original_response()
+
+    record_log(interaction.guild_id, "moderacion", f"{interaction.user} inició un sorteo: {premio}", str(interaction.user))
+
+    async def wait_and_finish():
+        await asyncio.sleep(seconds)
+        try:
+            await view.finish(message)
+        except:
+            pass
+
+    asyncio.create_task(wait_and_finish())
+
+
+# ──────────────────────────────────────────────────────────────
+#  SISTEMA DE VERIFICACIÓN CON CAPTCHA (3 niveles)
+# ──────────────────────────────────────────────────────────────
+
+class MathCaptchaModal(discord.ui.Modal):
+    """Captcha nivel 1: pregunta matemática simple."""
+
+    def __init__(self, question: str, answer: str):
+        super().__init__(title="✅ Verificación — Nivel 1")
+        self.expected_answer = answer
+
+        self.respuesta = discord.ui.TextInput(
+            label=question,
+            placeholder="Escribí el resultado...",
+            required=True,
+            max_length=10
+        )
+        self.add_item(self.respuesta)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.respuesta.value.strip() != self.expected_answer:
+            embed = build_embed(
+                title="❌ Respuesta incorrecta",
+                description="Volvé a hacer clic en **Verificarme** para intentar de nuevo.",
+                color=COLOR_WARN
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        cfg = get_guild_config(interaction.guild_id)
+        ok = await apply_verification(interaction.user, cfg)
+        if ok:
+            embed = build_embed(title="✅ ¡Verificación completa!", description=f"Bienvenido/a a **{interaction.guild.name}**. Ya tenés acceso al servidor.", color=COLOR_OK)
+            record_log(interaction.guild_id, "moderacion", f"{interaction.user} se verificó (nivel 1)", str(interaction.user))
+        else:
+            embed = build_embed(title="⚠️ Verificado, pero...", description="No pude asignarte el rol automáticamente. Avisale a un admin.", color=COLOR_WARN)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class TextCaptchaModal(discord.ui.Modal):
+    """Captcha nivel 2/3: código de imagen a transcribir."""
+
+    def __init__(self):
+        super().__init__(title="✅ Verificación — Ingresá el código")
+
+        self.codigo = discord.ui.TextInput(
+            label="Código de la imagen",
+            placeholder="Escribí el código exactamente como lo ves...",
+            required=True,
+            max_length=10
+        )
+        self.add_item(self.codigo)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        pending = pending_captchas.get(interaction.user.id)
+
+        if not pending or pending["guild_id"] != interaction.guild_id:
+            embed = build_embed(title="❌ Captcha expirado", description="Volvé a hacer clic en **Verificarme** para generar uno nuevo.", color=COLOR_WARN)
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        if datetime.now(timezone.utc) > pending["expires"]:
+            del pending_captchas[interaction.user.id]
+            embed = build_embed(title="⏰ Captcha expirado", description="Se venció el tiempo. Hacé clic en **Verificarme** para generar uno nuevo.", color=COLOR_WARN)
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        if self.codigo.value.strip().upper() != pending["code"]:
+            pending["attempts"] += 1
+            max_attempts = 3
+            if pending["attempts"] >= max_attempts:
+                del pending_captchas[interaction.user.id]
+                embed = build_embed(
+                    title="❌ Demasiados intentos fallidos",
+                    description="Superaste el máximo de intentos. Hacé clic en **Verificarme** de nuevo para generar un código nuevo.",
+                    color=COLOR_WARN
+                )
+            else:
+                restantes = max_attempts - pending["attempts"]
+                embed = build_embed(
+                    title="❌ Código incorrecto",
+                    description=f"Te quedan **{restantes}** intento(s). Volvé a hacer clic en **Ingresar código**.",
+                    color=COLOR_WARN
+                )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # Correcto
+        del pending_captchas[interaction.user.id]
+        cfg = get_guild_config(interaction.guild_id)
+        ok = await apply_verification(interaction.user, cfg)
+        if ok:
+            embed = build_embed(title="✅ ¡Verificación completa!", description=f"Bienvenido/a a **{interaction.guild.name}**. Ya tenés acceso al servidor.", color=COLOR_OK)
+            record_log(interaction.guild_id, "moderacion", f"{interaction.user} se verificó (nivel {cfg.get('verify_level', 2)})", str(interaction.user))
+        else:
+            embed = build_embed(title="⚠️ Verificado, pero...", description="No pude asignarte el rol automáticamente. Avisale a un admin.", color=COLOR_WARN)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class CaptchaAnswerView(discord.ui.View):
+    """Botón que abre el modal para escribir el código del captcha de imagen."""
+
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    @discord.ui.button(label="✍️ Ingresar código", style=discord.ButtonStyle.primary)
+    async def enter_code(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(TextCaptchaModal())
+
+
+class VerifyPanelView(discord.ui.View):
+    """Vista persistente del panel de verificación (botón fijo en el mensaje)."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="✅ Verificarme", style=discord.ButtonStyle.success, custom_id="nexus_verify_button")
+    async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cfg = get_guild_config(interaction.guild_id)
+
+        if not cfg.get("verify_enabled"):
+            embed = build_embed(title="❌ Verificación desactivada", description="La verificación no está activa en este servidor.", color=COLOR_WARN)
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        verified_role = interaction.guild.get_role(int(cfg["verify_role_id"])) if cfg.get("verify_role_id") else None
+        if verified_role and verified_role in interaction.user.roles:
+            embed = build_embed(title="✅ Ya estás verificado", description="No necesitás hacer nada más.", color=COLOR_OK)
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        level = int(cfg.get("verify_level", 1))
+
+        if level <= 1:
+            question, answer = generate_math_question()
+            await interaction.response.send_modal(MathCaptchaModal(question, answer))
+            return
+
+        code = generate_captcha_code(level)
+        pending_captchas[interaction.user.id] = {
+            "code": code,
+            "guild_id": interaction.guild_id,
+            "level": level,
+            "attempts": 0,
+            "expires": datetime.now(timezone.utc) + timedelta(minutes=3),
+        }
+
+        buf = generate_captcha_image(code, level)
+        file = discord.File(buf, filename="captcha.png")
+        embed = build_embed(
+            title=f"🔐 Verificación — Nivel {level}",
+            description="Escribí el código que ves en la imagen. Tenés 3 intentos y 3 minutos.",
+            color=COLOR_MAIN,
+            image="attachment://captcha.png"
+        )
+        await interaction.response.send_message(embed=embed, file=file, view=CaptchaAnswerView(), ephemeral=True)
+
+
+@bot.tree.command(name="config-verificacion", description="[Admin] Configura el sistema de verificación con captcha.")
+@app_commands.describe(
+    rol_verificado="Rol que se da al verificarse (ej: Members)",
+    rol_no_verificado="Rol que tienen los nuevos hasta verificarse (ej: no verificados)",
+    nivel="Dificultad del captcha: 1 fácil, 2 medio, 3 difícil",
+    canal="Canal donde se va a publicar el panel (opcional)"
+)
+@app_commands.choices(nivel=[
+    app_commands.Choice(name="Nivel 1 — Matemática simple", value=1),
+    app_commands.Choice(name="Nivel 2 — Imagen con código", value=2),
+    app_commands.Choice(name="Nivel 3 — Imagen difícil", value=3),
+])
+@app_commands.checks.has_permissions(administrator=True)
+async def config_verificacion_cmd(
+    interaction: discord.Interaction,
+    rol_verificado: discord.Role,
+    rol_no_verificado: discord.Role,
+    nivel: app_commands.Choice[int],
+    canal: discord.TextChannel | None = None
+):
+    cfg = get_guild_config(interaction.guild_id)
+    cfg["verify_enabled"] = True
+    cfg["verify_role_id"] = rol_verificado.id
+    cfg["verify_unverified_role_id"] = rol_no_verificado.id
+    cfg["verify_level"] = nivel.value
+    if canal:
+        cfg["verify_channel_id"] = canal.id
+    update_guild_config(interaction.guild_id, cfg)
+
+    embed = build_embed(
+        title="🔐 Verificación configurada",
+        description="El sistema de verificación quedó activo. Usá `/panel-verificacion` para publicar el botón.",
+        color=COLOR_OK,
+        fields=[
+            ("✅ Rol verificado", rol_verificado.mention, True),
+            ("🚫 Rol sin verificar", rol_no_verificado.mention, True),
+            ("🎯 Nivel", nivel.name, True),
+        ]
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="panel-verificacion", description="[Admin] Publica el panel con el botón de verificación.")
+@app_commands.describe(canal="Canal donde publicar el panel (por defecto el canal actual)")
+@app_commands.checks.has_permissions(administrator=True)
+async def panel_verificacion_cmd(interaction: discord.Interaction, canal: discord.TextChannel | None = None):
+    cfg = get_guild_config(interaction.guild_id)
+    if not cfg.get("verify_enabled"):
+        embed = build_embed(title="❌ Falta configurar", description="Primero corré `/config-verificacion` para configurar los roles y el nivel.", color=COLOR_WARN)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    target = canal or interaction.channel
+    nivel = cfg.get("verify_level", 1)
+    nivel_texto = {1: "Fácil (matemática)", 2: "Medio (imagen)", 3: "Difícil (imagen)"}.get(nivel, "Fácil")
+
+    embed = build_embed(
+        title="🔐 Verificación requerida",
+        description=(
+            f"Para acceder al resto de **{interaction.guild.name}**, hacé clic en **✅ Verificarme** "
+            f"y completá el captcha.\n\n🎯 Nivel actual: **{nivel_texto}**"
+        ),
+        color=COLOR_MAIN,
+        thumbnail=interaction.guild.icon.url if interaction.guild.icon else None
+    )
+    await target.send(embed=embed, view=VerifyPanelView())
+
+    confirm = build_embed(title="✅ Panel publicado", description=f"El panel de verificación se publicó en {target.mention}.", color=COLOR_OK)
+    await interaction.response.send_message(embed=confirm, ephemeral=True)
+
 
 app = Flask(__name__)
 
