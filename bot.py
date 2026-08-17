@@ -1536,6 +1536,13 @@ FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
 if not FFMPEG_AVAILABLE:
     print("⚠️  FFmpeg no está instalado o no está en el PATH. La música NO va a poder reproducirse hasta que instales FFmpeg en el servidor/host.")
 
+try:
+    import davey  # noqa: F401
+    DAVEY_AVAILABLE = True
+except ImportError:
+    DAVEY_AVAILABLE = False
+    print("⚠️  Falta la librería 'davey' (requerida por Discord para el nuevo cifrado de voz DAVE). Instalá 'davey' en requirements.txt o la música va a fallar con 'davey library needed in order to use voice'.")
+
 
 # En la función ytdl_extract, puedes añadir limpieza de URL
 async def ytdl_extract(query: str) -> tuple[dict | None, str | None]:
@@ -1979,6 +1986,15 @@ async def play(interaction: discord.Interaction, query: str):
         embed = build_embed(
             title="❌ FFmpeg no está instalado",
             description="El servidor donde corre el bot no tiene `ffmpeg` instalado. Sin FFmpeg la música no puede reproducirse. Avisale al owner del hosting para que lo instale.",
+            color=COLOR_WARN,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+
+    if not DAVEY_AVAILABLE:
+        embed = build_embed(
+            title="❌ Falta la librería 'davey'",
+            description="Discord ahora exige el protocolo de cifrado de voz DAVE, que requiere la librería `davey`. Agregá `davey>=0.1.4` a `requirements.txt`, reinstalá dependencias y reiniciá el bot.",
             color=COLOR_WARN,
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -7740,6 +7756,7 @@ async def botinfo_cmd(interaction: discord.Interaction):
     embed.add_field(name="👥 Miembros totales", value=str(total_miembros), inline=True)
     embed.add_field(name="⚡ Comandos slash", value=str(len(bot.tree.get_commands())), inline=True)
     embed.add_field(name="🎵 FFmpeg", value="✅ Disponible" if FFMPEG_AVAILABLE else "❌ No encontrado", inline=True)
+    embed.add_field(name="🔐 Davey (voz E2EE)", value="✅ Disponible" if DAVEY_AVAILABLE else "❌ No encontrado", inline=True)
     embed.add_field(name="🗄️ Base de datos", value="✅ Supabase" if supabase else "📁 Archivos locales", inline=True)
     embed.add_field(name="🎶 Reproduciendo música en", value=f"{sum(1 for s in music_states.values() if s.is_playing())} servidor(es)", inline=True)
     embed.set_footer(text=BOT_FOOTER_TEXT)
