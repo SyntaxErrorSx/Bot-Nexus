@@ -144,6 +144,16 @@ DEFAULT_GUILD_CONFIG = {
     "verify_unverified_role_id": None,
     "verify_level": 1,
     "verify_channel_id": None,
+    "dm_welcome_enabled": False,
+    "dm_welcome_message": (
+        "¡Hola {mention}! 👋\n\n"
+        "Bienvenido/a al equipo de **Nexus Studios**. Nos alegra tenerte en **{server}**.\n\n"
+        "Antes de continuar, te pedimos que leas y sigas las reglas del servidor para que todos "
+        "tengamos una buena experiencia.\n\n"
+        "Si tenés alguna duda, no dudes en contactar a un miembro del staff.\n\n"
+        "¡Que disfrutes tu estadía! 🚀"
+    ),
+    "dm_welcome_banner": None,
 }
 
 
@@ -1571,6 +1581,34 @@ YTDL_FORMAT_OPTIONS_FAST = {
 _ytdl_fast = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS_FAST)
 _ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
 
+# ⚡ CACHE DE BÚSQUEDAS: si dos personas piden la misma canción (o la misma
+# persona la vuelve a pedir) dentro de los próximos 10 minutos, respondemos
+# al instante en vez de volver a consultar yt-dlp desde cero. No reemplaza el
+# cache de stream_url por canción (ese es por instancia de Song); este es
+# global, por texto de búsqueda/URL, y es lo que más ayuda con canciones
+# populares del server que se repiten seguido.
+_search_cache: dict[str, tuple[dict, float]] = {}
+_SEARCH_CACHE_TTL = 600      # 10 minutos
+_SEARCH_CACHE_MAX = 200      # evita crecer sin límite en memoria
+
+
+def _search_cache_get(key: str) -> dict | None:
+    entry = _search_cache.get(key)
+    if not entry:
+        return None
+    data, ts = entry
+    if time.time() - ts > _SEARCH_CACHE_TTL:
+        _search_cache.pop(key, None)
+        return None
+    return data
+
+
+def _search_cache_set(key: str, data: dict) -> None:
+    if len(_search_cache) >= _SEARCH_CACHE_MAX:
+        oldest_key = min(_search_cache, key=lambda k: _search_cache[k][1])
+        _search_cache.pop(oldest_key, None)
+    _search_cache[key] = (data, time.time())
+
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
 if not FFMPEG_AVAILABLE:
     print("⚠️  FFmpeg no está instalado o no está en el PATH. La música NO va a poder reproducirse hasta que instales FFmpeg en el servidor/host.")
@@ -1611,6 +1649,12 @@ async def ytdl_extract(query: str) -> tuple[dict | None, str | None]:
     
     search_term = query if URL_REGEX.match(query) else f"ytsearch1:{query}"
 
+    # ⚡ Si ya resolvimos esta misma búsqueda hace poco, la devolvemos directo.
+    cache_key = search_term.strip().lower()
+    cached = _search_cache_get(cache_key)
+    if cached is not None:
+        return cached, None
+
     # ⚡ Intento rápido (1 solo cliente). Si falla por lo que sea, reintentamos
     # con los 4 clientes completos como red de seguridad — más lento, pero es
     # exactamente el mismo comportamiento robusto que había antes.
@@ -1636,6 +1680,7 @@ async def ytdl_extract(query: str) -> tuple[dict | None, str | None]:
             return None, "No se encontraron resultados válidos."
         data = entries[0]
 
+    _search_cache_set(cache_key, data)
     return data, None
 
 
@@ -2845,6 +2890,26 @@ async def on_member_join(member: discord.Member):
                 await member.add_roles(unverified_role, reason="Pendiente de verificación")
             except:
                 pass
+
+    # DM de bienvenida profesional (independiente del welcome de canal de arriba)
+    if cfg.get("dm_welcome_enabled"):
+        try:
+            dm_mensaje = fill_placeholders(cfg.get("dm_welcome_message", ""), member, member.guild)
+            dm_embed = build_embed(
+                title=f"👋 ¡Bienvenido/a a {member.guild.name}!",
+                description=dm_mensaje,
+                color=COLOR_MAIN,
+                thumbnail=member.guild.icon.url if member.guild.icon else None,
+                image=cfg.get("dm_welcome_banner"),
+                footer="Equipo de Nexus Studios",
+            )
+            await member.send(embed=dm_embed)
+        except discord.Forbidden:
+            # El usuario tiene los DMs cerrados para este servidor; no debe
+            # interrumpir el resto del flujo de bienvenida.
+            pass
+        except Exception as e:
+            print(f"⚠️ No se pudo enviar el DM de bienvenida a {member}: {e}")
 
     if not cfg.get("welcome_enabled"):
         return
@@ -4260,6 +4325,78 @@ async def config_despedida(
         ],
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="config-dm-bienvenida", description="[Admin] Configura el mensaje privado (DM) que reciben los nuevos miembros al unirse.")
+@app_commands.describe(
+    activado="¿Activar el DM de bienvenida?",
+    mensaje="Mensaje que se enviará por privado (usa {mention}, {username}, {server}, {membercount}, etc.)",
+    banner="URL de un GIF o imagen para el banner del DM (opcional)"
+)
+@app_commands.choices(activado=[
+    app_commands.Choice(name="Sí, activar", value="si"),
+    app_commands.Choice(name="No, desactivar", value="no"),
+])
+@app_commands.checks.has_permissions(administrator=True)
+async def config_dm_bienvenida(
+    interaction: discord.Interaction,
+    activado: app_commands.Choice[str] | None = None,
+    mensaje: str | None = None,
+    banner: str | None = None
+):
+    track_command(interaction.guild_id, "config-dm-bienvenida")
+    cfg = get_guild_config(interaction.guild_id)
+
+    if activado is not None:
+        cfg["dm_welcome_enabled"] = activado.value == "si"
+    if mensaje is not None:
+        cfg["dm_welcome_message"] = mensaje
+    if banner is not None:
+        cfg["dm_welcome_banner"] = banner
+
+    update_guild_config(interaction.guild_id, cfg)
+
+    embed = build_embed(
+        title="✅ DM de bienvenida actualizado",
+        color=COLOR_OK,
+        fields=[
+            ("Estado", "✅ Activado" if cfg.get("dm_welcome_enabled") else "❌ Desactivado", True),
+            ("Banner", "✅ Configurado" if cfg.get("dm_welcome_banner") else "No configurado", True),
+            ("Mensaje", (cfg.get("dm_welcome_message", "") or "")[:1024], False),
+        ],
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="test-dm-bienvenida", description="[Admin] Te envía por privado una vista previa del DM de bienvenida.")
+@app_commands.checks.has_permissions(administrator=True)
+async def test_dm_bienvenida(interaction: discord.Interaction):
+    track_command(interaction.guild_id, "test-dm-bienvenida")
+    cfg = get_guild_config(interaction.guild_id)
+    member = interaction.user
+
+    mensaje = fill_placeholders(cfg.get("dm_welcome_message", ""), member, interaction.guild)
+    embed = build_embed(
+        title=f"👋 ¡Bienvenido/a a {interaction.guild.name}! (vista previa)",
+        description=mensaje,
+        color=COLOR_MAIN,
+        thumbnail=interaction.guild.icon.url if interaction.guild.icon else None,
+        image=cfg.get("dm_welcome_banner"),
+        footer="Equipo de Nexus Studios · Vista previa",
+    )
+    try:
+        await member.send(embed=embed)
+    except discord.Forbidden:
+        error_embed = build_embed(
+            title="❌ No se pudo enviar",
+            description="Tenés los DMs cerrados para este servidor, así que no pude mandarte la vista previa.",
+            color=COLOR_WARN,
+        )
+        await interaction.response.send_message(embed=error_embed, ephemeral=True)
+        return
+
+    confirm = build_embed(title="✅ Enviado", description="Revisá tus mensajes privados.", color=COLOR_OK)
+    await interaction.response.send_message(embed=confirm, ephemeral=True)
 
 
 @bot.tree.command(name="test-welcome", description="[Admin] Previsualiza el mensaje de bienvenida.")
