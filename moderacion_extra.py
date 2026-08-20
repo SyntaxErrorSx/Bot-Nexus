@@ -126,147 +126,11 @@ def setup_moderacion_extra(
         cfg = get_guild_config(guild_id)
         return str(user_id) in cfg.get("automod_whitelist", [])
 
-    # <-- CAMBIO CRUCIAL 1: Definir el grupo
-    moderacion_group = app_commands.Group(
-        name="moderacion",
-        description="Comandos de moderación de Nexus."
-    )
-
-    # <-- CAMBIO CRUCIAL 2: Cambiar @bot.tree.command por @moderacion_group.command
-    @moderacion_group.command(name="whitelist", description="[Admin] Administra la whitelist local (exime del automod de este server).")
-    @app_commands.describe(accion="agregar / quitar / lista", usuario="Usuario a exceptuar del automod local")
-    @app_commands.choices(accion=[
-        app_commands.Choice(name="agregar", value="agregar"),
-        app_commands.Choice(name="quitar", value="quitar"),
-        app_commands.Choice(name="lista", value="lista"),
-    ])
-    @app_commands.checks.has_permissions(administrator=True)
-    async def whitelist_cmd(
-        interaction: discord.Interaction,
-        accion: app_commands.Choice[str],
-        usuario: discord.Member | None = None,
-    ):
-        cfg = get_guild_config(interaction.guild_id)
-        lista = cfg.setdefault("automod_whitelist", [])
-
-        if accion.value == "lista":
-            if not lista:
-                embed = build_embed(title=f"{EMOJIS['terminal']} Whitelist local", description="Vacía.", color=COLOR_MAIN)
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
-            lineas = []
-            for uid in lista[:25]:
-                miembro = interaction.guild.get_member(int(uid))
-                lineas.append(f"`{uid}`" + (f" — {miembro.mention}" if miembro else ""))
-            embed = build_embed(title=f"{EMOJIS['terminal']} Whitelist local ({len(lista)})", description="\n".join(lineas), color=COLOR_MAIN)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        if not usuario:
-            embed = build_embed(title="❌ Falta el usuario", color=COLOR_WARN)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        if accion.value == "agregar":
-            if str(usuario.id) not in lista:
-                lista.append(str(usuario.id))
-            desc = f"{usuario.mention} ahora está exceptuado del automod de este server (blacklist de palabras, anti-scam, anti-@everyone)."
-            titulo = f"{EMOJIS['Verify']} Agregado a la whitelist local"
-        else:
-            if str(usuario.id) in lista:
-                lista.remove(str(usuario.id))
-            desc = f"{usuario.mention} fue quitado de la whitelist local."
-            titulo = f"{EMOJIS['checkmark']} Quitado de la whitelist local"
-
-        update_guild_config(interaction.guild_id, cfg)
-        embed = build_embed(title=titulo, description=desc, color=COLOR_OK)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @moderacion_group.command(name="global-blacklist", description="[Owner] Blacklist GLOBAL (baneo automático en todos los servers donde esté el bot).")
-    @app_commands.describe(accion="agregar / quitar / lista", usuario_id="ID del usuario", razon="Motivo del baneo global")
-    @app_commands.choices(accion=[
-        app_commands.Choice(name="agregar", value="agregar"),
-        app_commands.Choice(name="quitar", value="quitar"),
-        app_commands.Choice(name="lista", value="lista"),
-    ])
-    async def global_blacklist_cmd(
-        interaction: discord.Interaction,
-        accion: app_commands.Choice[str],
-        usuario_id: str | None = None,
-        razon: str = "No especificada",
-    ):
-        if not is_owner(interaction):
-            embed = build_embed(title=f"{EMOJIS['ban']} Solo el owner puede usar esto", color=COLOR_WARN)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        data = _global_get("global_blacklist")
-
-        if accion.value == "lista":
-            if not data:
-                embed = build_embed(title="📋 Blacklist global", description="Vacía.", color=COLOR_MAIN)
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
-            lineas = [f"`{uid}` — {info.get('razon', '?')}" for uid, info in list(data.items())[:25]]
-            embed = build_embed(title=f"📋 Blacklist global ({len(data)})", description="\n".join(lineas), color=COLOR_MAIN)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        if not usuario_id or not usuario_id.isdigit():
-            embed = build_embed(title="❌ Falta el ID de usuario", color=COLOR_WARN)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        if accion.value == "agregar":
-            data[usuario_id] = {"razon": razon, "por": str(interaction.user), "fecha": datetime.now(timezone.utc).isoformat()}
-            _global_set("global_blacklist", data)
-            embed = build_embed(title=f"{EMOJIS['ban']} Agregado a blacklist global", description=f"`{usuario_id}` — {razon}", color=COLOR_OK)
-        else:
-            data.pop(usuario_id, None)
-            _global_set("global_blacklist", data)
-            embed = build_embed(title=f"{EMOJIS['checkmark']} Quitado de blacklist global", description=f"`{usuario_id}`", color=COLOR_OK)
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @moderacion_group.command(name="global-whitelist", description="[Owner] Whitelist GLOBAL (exime del automod y de la blacklist global en TODOS los servers).")
-    @app_commands.describe(accion="agregar / quitar / lista", usuario_id="ID del usuario")
-    @app_commands.choices(accion=[
-        app_commands.Choice(name="agregar", value="agregar"),
-        app_commands.Choice(name="quitar", value="quitar"),
-        app_commands.Choice(name="lista", value="lista"),
-    ])
-    async def global_whitelist_cmd(
-        interaction: discord.Interaction,
-        accion: app_commands.Choice[str],
-        usuario_id: str | None = None,
-    ):
-        if not is_owner(interaction):
-            embed = build_embed(title=f"{EMOJIS['ban']} Solo el owner puede usar esto", color=COLOR_WARN)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        data = _global_get("global_whitelist")
-
-        if accion.value == "lista":
-            if not data:
-                embed = build_embed(title="📋 Whitelist global", description="Vacía.", color=COLOR_MAIN)
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
-            lineas = [f"`{uid}`" for uid in list(data.keys())[:25]]
-            embed = build_embed(title=f"📋 Whitelist global ({len(data)})", description="\n".join(lineas), color=COLOR_MAIN)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        if not usuario_id or not usuario_id.isdigit():
-            embed = build_embed(title="❌ Falta el ID de usuario", color=COLOR_WARN)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        if accion.value == "agregar":
-            data[usuario_id] = {"por": str(interaction.user), "fecha": datetime.now(timezone.utc).isoformat()}
-            _global_set("global_whitelist", data)
-            embed = build_embed(title=f"{EMOJIS['Verify']} Agregado a whitelist global", description=f"`{usuario_id}`", color=COLOR_OK)
-        else:
-            data.pop(usuario_id, None)
-            _global_set("global_whitelist", data)
-            embed = build_embed(title=f"{EMOJIS['checkmark']} Quitado de whitelist global", description=f"`{usuario_id}`", color=COLOR_OK)
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
     # ────────────────────────────────────────────────────────
     #  KICKER DE BOTS NO VERIFICADOS + CHEQUEO ANTI-RAID AL ENTRAR
     # ────────────────────────────────────────────────────────
 
-    @moderacion_group.command(name="config-bot-kicker", description="[Admin] Activa/desactiva la expulsión automática de bots no autorizados.")
+    @bot.tree.command(name="config-bot-kicker", description="[Admin] Activa/desactiva la expulsión automática de bots no autorizados.")
     @app_commands.describe(estado="Activar o desactivar")
     @app_commands.choices(estado=[
         app_commands.Choice(name="activar", value="activar"),
@@ -285,7 +149,7 @@ def setup_moderacion_extra(
         embed = build_embed(title=f"{EMOJIS['checkmark']} Bot-kicker actualizado", description=desc, color=COLOR_OK)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @moderacion_group.command(name="bot-whitelist", description="[Admin] Administra qué bots pueden unirse sin ser expulsados.")
+    @bot.tree.command(name="bot-whitelist", description="[Admin] Administra qué bots pueden unirse sin ser expulsados.")
     @app_commands.describe(accion="agregar / quitar / lista", bot_id="ID del bot")
     @app_commands.choices(accion=[
         app_commands.Choice(name="agregar", value="agregar"),
@@ -350,7 +214,7 @@ def setup_moderacion_extra(
     #  BLACKLIST DE PALABRAS + ANTI-SCAM + ANTI-@EVERYONE
     # ────────────────────────────────────────────────────────
 
-    @moderacion_group.command(name="blacklist-palabra", description="[Admin] Administra palabras prohibidas (se borran automáticamente).")
+    @bot.tree.command(name="blacklist-palabra", description="[Admin] Administra palabras prohibidas (se borran automáticamente).")
     @app_commands.describe(accion="agregar / quitar / lista", palabra="Palabra o frase a filtrar")
     @app_commands.choices(accion=[
         app_commands.Choice(name="agregar", value="agregar"),
@@ -385,7 +249,7 @@ def setup_moderacion_extra(
         embed = build_embed(title=f"{EMOJIS['checkmark']} Blacklist actualizada", description=desc, color=COLOR_OK)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @moderacion_group.command(name="config-antiscam", description="[Admin] Activa/desactiva el filtro anti-estafas (links falsos de nitro/cripto).")
+    @bot.tree.command(name="config-antiscam", description="[Admin] Activa/desactiva el filtro anti-estafas (links falsos de nitro/cripto).")
     @app_commands.describe(estado="Activar o desactivar")
     @app_commands.choices(estado=[
         app_commands.Choice(name="activar", value="activar"),
@@ -400,7 +264,7 @@ def setup_moderacion_extra(
         embed = build_embed(title=f"{EMOJIS['checkmark']} Anti-scam actualizado", description=desc, color=COLOR_OK)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @moderacion_group.command(name="config-antieveryone", description="[Admin] Activa/desactiva el bloqueo de @everyone/@here abusivo.")
+    @bot.tree.command(name="config-antieveryone", description="[Admin] Activa/desactiva el bloqueo de @everyone/@here abusivo.")
     @app_commands.describe(estado="Activar o desactivar")
     @app_commands.choices(estado=[
         app_commands.Choice(name="activar", value="activar"),
@@ -498,7 +362,7 @@ def setup_moderacion_extra(
             all_data[str(guild_id)] = data
             _save_json(JAIL_PATH, all_data)
 
-    @moderacion_group.command(name="config-jail-rol", description="[Admin] Define qué rol se usa para /jail.")
+    @bot.tree.command(name="config-jail-rol", description="[Admin] Define qué rol se usa para /jail.")
     @app_commands.describe(rol="Rol de castigo (configurá sus permisos de canal en Discord)")
     @app_commands.checks.has_permissions(administrator=True)
     async def config_jail_rol_cmd(interaction: discord.Interaction, rol: discord.Role):
@@ -512,7 +376,7 @@ def setup_moderacion_extra(
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @moderacion_group.command(name="jail", description="[Mod] Manda a un usuario a la celda (rol de castigo temporal).")
+    @bot.tree.command(name="jail", description="[Mod] Manda a un usuario a la celda (rol de castigo temporal).")
     @app_commands.describe(usuario="Usuario a enjaular", duracion="Duración: 10m, 1h, 1d (vacío = permanente)", razon="Razón")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def jail_cmd(interaction: discord.Interaction, usuario: discord.Member, duracion: str | None = None, razon: str = "No especificada"):
@@ -563,7 +427,7 @@ def setup_moderacion_extra(
         )
         await interaction.response.send_message(embed=embed)
 
-    @moderacion_group.command(name="unjail", description="[Mod] Saca a un usuario de la celda.")
+    @bot.tree.command(name="unjail", description="[Mod] Saca a un usuario de la celda.")
     @app_commands.describe(usuario="Usuario a liberar")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def unjail_cmd(interaction: discord.Interaction, usuario: discord.Member):
@@ -709,7 +573,7 @@ def setup_moderacion_extra(
             confirm = build_embed(title="✅ Ticket creado", description=channel.mention, color=COLOR_OK)
             await interaction.response.send_message(embed=confirm, ephemeral=True)
 
-    @moderacion_group.command(name="ticket-config", description="[Admin] Configura la categoría y el rol de staff para los tickets.")
+    @bot.tree.command(name="ticket-config", description="[Admin] Configura la categoría y el rol de staff para los tickets.")
     @app_commands.describe(categoria="Categoría donde se crean los tickets", rol_staff="Rol que puede ver y atender los tickets")
     @app_commands.checks.has_permissions(administrator=True)
     async def ticket_config_cmd(interaction: discord.Interaction, categoria: discord.CategoryChannel, rol_staff: discord.Role):
@@ -724,7 +588,7 @@ def setup_moderacion_extra(
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @moderacion_group.command(name="ticket-panel", description="[Admin] Publica el panel para abrir tickets.")
+    @bot.tree.command(name="ticket-panel", description="[Admin] Publica el panel para abrir tickets.")
     @app_commands.describe(canal="Canal donde publicar (por defecto el actual)")
     @app_commands.checks.has_permissions(administrator=True)
     async def ticket_panel_cmd(interaction: discord.Interaction, canal: discord.TextChannel | None = None):
@@ -743,6 +607,3 @@ def setup_moderacion_extra(
     # funcionando después de un reinicio del bot.
     bot.add_view(TicketPanelView())
     bot.add_view(CloseTicketView())
-
-    # <-- CAMBIO CRUCIAL 3: Registrar el grupo de comandos
-    bot.tree.add_command(moderacion_group)
