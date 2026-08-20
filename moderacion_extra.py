@@ -95,8 +95,6 @@ def setup_moderacion_extra(
     # ────────────────────────────────────────────────────────
 
     def _global_get(kind: str) -> dict:
-        """kind: 'global_blacklist' o 'global_whitelist'. Usa Supabase (guild_id='all')
-        con fallback a un JSON local si Supabase no está configurado."""
         data = supabase_get(0, kind)  # guild_id 0 = tabla global compartida
         if data is not None:
             return data
@@ -118,8 +116,7 @@ def setup_moderacion_extra(
         return str(user_id) in data
 
     # ────────────────────────────────────────────────────────
-    #  WHITELIST LOCAL (solo exime del automod de ESTE server,
-    #  a diferencia de la global que aplica en todos)
+    #  WHITELIST LOCAL
     # ────────────────────────────────────────────────────────
 
     def is_locally_whitelisted(guild_id: int, user_id: int) -> bool:
@@ -127,10 +124,15 @@ def setup_moderacion_extra(
         return str(user_id) in cfg.get("automod_whitelist", [])
 
     # ────────────────────────────────────────────────────────
-    #  KICKER DE BOTS NO VERIFICADOS + CHEQUEO ANTI-RAID AL ENTRAR
+    #  GRUPOS DE COMANDOS (Previene superación de límite de Discord)
     # ────────────────────────────────────────────────────────
+    
+    config_group = app_commands.Group(name="config", description="[Admin] Configuración avanzada de seguridad del servidor.")
+    ticket_group = app_commands.Group(name="ticket", description="[Admin] Gestión y configuración del sistema de soporte.")
 
-    @bot.tree.command(name="config-bot-kicker", description="[Admin] Activa/desactiva la expulsión automática de bots no autorizados.")
+    # Subcomandos dentro del grupo /config
+
+    @config_group.command(name="bot-kicker", description="Activa/desactiva la expulsión automática de bots no autorizados.")
     @app_commands.describe(estado="Activar o desactivar")
     @app_commands.choices(estado=[
         app_commands.Choice(name="activar", value="activar"),
@@ -148,6 +150,90 @@ def setup_moderacion_extra(
         )
         embed = build_embed(title=f"{EMOJIS['checkmark']} Bot-kicker actualizado", description=desc, color=COLOR_OK)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @config_group.command(name="antiscam", description="Activa/desactiva el filtro anti-estafas (links falsos de nitro/cripto).")
+    @app_commands.describe(estado="Activar o desactivar")
+    @app_commands.choices(estado=[
+        app_commands.Choice(name="activar", value="activar"),
+        app_commands.Choice(name="desactivar", value="desactivar"),
+    ])
+    @app_commands.checks.has_permissions(administrator=True)
+    async def config_antiscam_cmd(interaction: discord.Interaction, estado: app_commands.Choice[str]):
+        cfg = get_guild_config(interaction.guild_id)
+        cfg["antiscam_enabled"] = (estado.value == "activar")
+        update_guild_config(interaction.guild_id, cfg)
+        desc = "Se borrarán mensajes con links/textos típicos de estafas (nitro falso, airdrops, etc.) y se muteará al autor." if cfg["antiscam_enabled"] else "Anti-scam desactivado."
+        embed = build_embed(title=f"{EMOJIS['checkmark']} Anti-scam actualizado", description=desc, color=COLOR_OK)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @config_group.command(name="antieveryone", description="Activa/desactiva el bloqueo de @everyone/@here abusivo.")
+    @app_commands.describe(estado="Activar o desactivar")
+    @app_commands.choices(estado=[
+        app_commands.Choice(name="activar", value="activar"),
+        app_commands.Choice(name="desactivar", value="desactivar"),
+    ])
+    @app_commands.checks.has_permissions(administrator=True)
+    async def config_antieveryone_cmd(interaction: discord.Interaction, estado: app_commands.Choice[str]):
+        cfg = get_guild_config(interaction.guild_id)
+        cfg["antieveryone_enabled"] = (estado.value == "activar")
+        update_guild_config(interaction.guild_id, cfg)
+        desc = "Se borrará cualquier @everyone/@here de usuarios sin permiso de gestión del server." if cfg["antieveryone_enabled"] else "Anti-@everyone desactivado."
+        embed = build_embed(title=f"{EMOJIS['checkmark']} Anti-@everyone actualizado", description=desc, color=COLOR_OK)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @config_group.command(name="jail-rol", description="Define qué rol se usa para /jail.")
+    @app_commands.describe(rol="Rol de castigo (configurá sus permisos de canal en Discord)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def config_jail_rol_cmd(interaction: discord.Interaction, rol: discord.Role):
+        cfg = get_guild_config(interaction.guild_id)
+        cfg["jail_role_id"] = rol.id
+        update_guild_config(interaction.guild_id, cfg)
+        embed = build_embed(
+            title=f"{EMOJIS['checkmark']} Rol de jail configurado",
+            description=f"Se usará {rol.mention}. Acordate de restringir sus permisos en los canales del server.",
+            color=COLOR_OK,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Subcomandos dentro del grupo /ticket
+
+    @ticket_group.command(name="config", description="Configura la categoría y el rol de staff para los tickets.")
+    @app_commands.describe(categoria="Categoría donde se crean los tickets", rol_staff="Rol que puede ver y atender los tickets")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def ticket_config_cmd(interaction: discord.Interaction, categoria: discord.CategoryChannel, rol_staff: discord.Role):
+        cfg = get_guild_config(interaction.guild_id)
+        cfg["ticket_category_id"] = categoria.id
+        cfg["ticket_staff_role_id"] = rol_staff.id
+        update_guild_config(interaction.guild_id, cfg)
+        embed = build_embed(
+            title=f"{EMOJIS['checkmark']} Tickets configurados",
+            description=f"Categoría: {categoria.mention if hasattr(categoria, 'mention') else categoria.name}\nStaff: {rol_staff.mention}",
+            color=COLOR_OK,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @ticket_group.command(name="panel", description="Publica el panel para abrir tickets.")
+    @app_commands.describe(canal="Canal donde publicar (por defecto el actual)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def ticket_panel_cmd(interaction: discord.Interaction, canal: discord.TextChannel | None = None):
+        target = canal or interaction.channel
+        embed = build_embed(
+            title=f"{EMOJIS['discorddevelopers']} Soporte — NEXUS",
+            description="¿Necesitás ayuda? Hacé clic en el botón para abrir un ticket privado con el staff.",
+            color=COLOR_MAIN,
+            footer=footer_text,
+        )
+        await target.send(embed=embed, view=TicketPanelView())
+        confirm = build_embed(title="✅ Panel publicado", description=f"Se publicó en {target.mention}.", color=COLOR_OK)
+        await interaction.response.send_message(embed=confirm, ephemeral=True)
+
+    # Añadir los grupos al bot tree
+    bot.tree.add_command(config_group)
+    bot.tree.add_command(ticket_group)
+
+    # ────────────────────────────────────────────────────────
+    #  OTROS COMANDOS RAÍZ
+    # ────────────────────────────────────────────────────────
 
     @bot.tree.command(name="bot-whitelist", description="[Admin] Administra qué bots pueden unirse sin ser expulsados.")
     @app_commands.describe(accion="agregar / quitar / lista", bot_id="ID del bot")
@@ -182,37 +268,6 @@ def setup_moderacion_extra(
         update_guild_config(interaction.guild_id, cfg)
         embed = build_embed(title=f"{EMOJIS['checkmark']} Whitelist de bots actualizada", description=desc, color=COLOR_OK)
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    async def on_member_join_antiraid(member: discord.Member):
-        guild = member.guild
-        cfg = get_guild_config(guild.id)
-
-        # 1) Blacklist global (aplica a cualquier miembro, sea bot o no)
-        if not is_globally_whitelisted(member.id):
-            razon = is_globally_blacklisted(member.id)
-            if razon:
-                try:
-                    await member.ban(reason=f"Blacklist global: {razon}")
-                    record_log(guild.id, "moderacion", f"{EMOJIS['olhos70']} {member} detectado y baneado automáticamente (blacklist global: {razon})", "Sistema")
-                except discord.Forbidden:
-                    pass
-                return
-
-        # 2) Kicker de bots no verificados/no autorizados
-        if member.bot and cfg.get("bot_kicker_enabled"):
-            whitelist = set(cfg.get("bot_whitelist", []))
-            if str(member.id) not in whitelist:
-                try:
-                    await member.kick(reason="Bot no autorizado (no está en la whitelist del server)")
-                    record_log(guild.id, "moderacion", f"{EMOJIS['terminal']} Bot {member} expulsado automáticamente (no está en whitelist)", "Sistema")
-                except discord.Forbidden:
-                    pass
-
-    bot.add_listener(on_member_join_antiraid, "on_member_join")
-
-    # ────────────────────────────────────────────────────────
-    #  BLACKLIST DE PALABRAS + ANTI-SCAM + ANTI-@EVERYONE
-    # ────────────────────────────────────────────────────────
 
     @bot.tree.command(name="blacklist-palabra", description="[Admin] Administra palabras prohibidas (se borran automáticamente).")
     @app_commands.describe(accion="agregar / quitar / lista", palabra="Palabra o frase a filtrar")
@@ -249,133 +304,6 @@ def setup_moderacion_extra(
         embed = build_embed(title=f"{EMOJIS['checkmark']} Blacklist actualizada", description=desc, color=COLOR_OK)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @bot.tree.command(name="config-antiscam", description="[Admin] Activa/desactiva el filtro anti-estafas (links falsos de nitro/cripto).")
-    @app_commands.describe(estado="Activar o desactivar")
-    @app_commands.choices(estado=[
-        app_commands.Choice(name="activar", value="activar"),
-        app_commands.Choice(name="desactivar", value="desactivar"),
-    ])
-    @app_commands.checks.has_permissions(administrator=True)
-    async def config_antiscam_cmd(interaction: discord.Interaction, estado: app_commands.Choice[str]):
-        cfg = get_guild_config(interaction.guild_id)
-        cfg["antiscam_enabled"] = (estado.value == "activar")
-        update_guild_config(interaction.guild_id, cfg)
-        desc = "Se borrarán mensajes con links/textos típicos de estafas (nitro falso, airdrops, etc.) y se muteará al autor." if cfg["antiscam_enabled"] else "Anti-scam desactivado."
-        embed = build_embed(title=f"{EMOJIS['checkmark']} Anti-scam actualizado", description=desc, color=COLOR_OK)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @bot.tree.command(name="config-antieveryone", description="[Admin] Activa/desactiva el bloqueo de @everyone/@here abusivo.")
-    @app_commands.describe(estado="Activar o desactivar")
-    @app_commands.choices(estado=[
-        app_commands.Choice(name="activar", value="activar"),
-        app_commands.Choice(name="desactivar", value="desactivar"),
-    ])
-    @app_commands.checks.has_permissions(administrator=True)
-    async def config_antieveryone_cmd(interaction: discord.Interaction, estado: app_commands.Choice[str]):
-        cfg = get_guild_config(interaction.guild_id)
-        cfg["antieveryone_enabled"] = (estado.value == "activar")
-        update_guild_config(interaction.guild_id, cfg)
-        desc = "Se borrará cualquier @everyone/@here de usuarios sin permiso de gestión del server." if cfg["antieveryone_enabled"] else "Anti-@everyone desactivado."
-        embed = build_embed(title=f"{EMOJIS['checkmark']} Anti-@everyone actualizado", description=desc, color=COLOR_OK)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    async def on_message_moderacion_extra(message: discord.Message):
-        if message.author.bot or not message.guild:
-            return
-        if message.author.guild_permissions.administrator:
-            return
-        if is_globally_whitelisted(message.author.id):
-            return
-        if is_locally_whitelisted(message.guild.id, message.author.id):
-            return
-
-        cfg = get_guild_config(message.guild.id)
-        content_lower = message.content.lower()
-
-        # Blacklist de palabras
-        for palabra in cfg.get("blacklist_words", []):
-            if palabra in content_lower:
-                try:
-                    await message.delete()
-                except discord.NotFound:
-                    pass
-                try:
-                    await message.channel.send(
-                        f"{EMOJIS['ban']} {message.author.mention}, ese mensaje contenía una palabra prohibida.",
-                        delete_after=6,
-                    )
-                except discord.Forbidden:
-                    pass
-                record_log(message.guild.id, "moderacion", f"🚫 Mensaje de {message.author} borrado (palabra prohibida: `{palabra}`)", "Sistema")
-                return
-
-        # Anti-scam
-        if cfg.get("antiscam_enabled") and message_has_scam_pattern(message.content):
-            try:
-                await message.delete()
-            except discord.NotFound:
-                pass
-            try:
-                if message.guild.me.guild_permissions.moderate_members and message.author.top_role < message.guild.me.top_role:
-                    await message.author.timeout(discord.utils.utcnow() + timedelta(hours=1), reason="Mensaje de estafa detectado")
-            except discord.Forbidden:
-                pass
-            try:
-                await message.channel.send(
-                    f"{EMOJIS['ban']} Se borró un mensaje de {message.author.mention} por parecer una estafa (nitro/cripto falso).",
-                    delete_after=8,
-                )
-            except discord.Forbidden:
-                pass
-            record_log(message.guild.id, "moderacion", f"🚨 Mensaje de estafa de {message.author} borrado y muteado 1h", "Sistema")
-            return
-
-        # Anti-@everyone / @here
-        if cfg.get("antieveryone_enabled") and message.mention_everyone and not message.author.guild_permissions.mention_everyone:
-            try:
-                await message.delete()
-            except discord.NotFound:
-                pass
-            try:
-                await message.channel.send(
-                    f"{EMOJIS['ban']} {message.author.mention}, no tenés permiso para mencionar a todo el server.",
-                    delete_after=6,
-                )
-            except discord.Forbidden:
-                pass
-            record_log(message.guild.id, "moderacion", f"📢 {message.author} intentó usar @everyone/@here sin permiso (mensaje borrado)", "Sistema")
-            return
-
-    bot.add_listener(on_message_moderacion_extra, "on_message")
-
-    # ────────────────────────────────────────────────────────
-    #  JAIL (rol de castigo temporal, separado del timeout nativo)
-    # ────────────────────────────────────────────────────────
-
-    def _jail_get(guild_id: int) -> dict:
-        data = supabase_get(guild_id, "jail") or _load_json(JAIL_PATH).get(str(guild_id), {})
-        return data
-
-    def _jail_set(guild_id: int, data: dict) -> None:
-        if not supabase_set(guild_id, "jail", data):
-            all_data = _load_json(JAIL_PATH)
-            all_data[str(guild_id)] = data
-            _save_json(JAIL_PATH, all_data)
-
-    @bot.tree.command(name="config-jail-rol", description="[Admin] Define qué rol se usa para /jail.")
-    @app_commands.describe(rol="Rol de castigo (configurá sus permisos de canal en Discord)")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def config_jail_rol_cmd(interaction: discord.Interaction, rol: discord.Role):
-        cfg = get_guild_config(interaction.guild_id)
-        cfg["jail_role_id"] = rol.id
-        update_guild_config(interaction.guild_id, cfg)
-        embed = build_embed(
-            title=f"{EMOJIS['checkmark']} Rol de jail configurado",
-            description=f"Se usará {rol.mention}. Acordate de restringir sus permisos en los canales del server.",
-            color=COLOR_OK,
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
     @bot.tree.command(name="jail", description="[Mod] Manda a un usuario a la celda (rol de castigo temporal).")
     @app_commands.describe(usuario="Usuario a enjaular", duracion="Duración: 10m, 1h, 1d (vacío = permanente)", razon="Razón")
     @app_commands.checks.has_permissions(moderate_members=True)
@@ -383,7 +311,7 @@ def setup_moderacion_extra(
         cfg = get_guild_config(interaction.guild_id)
         jail_role_id = cfg.get("jail_role_id")
         if not jail_role_id:
-            embed = build_embed(title="❌ No hay rol de jail configurado", description="Usá `/config-jail-rol` primero.", color=COLOR_WARN)
+            embed = build_embed(title="❌ No hay rol de jail configurado", description="Usá `/config jail-rol` primero.", color=COLOR_WARN)
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         jail_role = interaction.guild.get_role(int(jail_role_id))
@@ -450,6 +378,115 @@ def setup_moderacion_extra(
         embed = build_embed(title="🔓 Usuario liberado", description=f"**{usuario}** fue sacado de la celda.", color=COLOR_OK)
         await interaction.response.send_message(embed=embed)
 
+    # ────────────────────────────────────────────────────────
+    #  LISTENERS Y EVENTOS
+    # ────────────────────────────────────────────────────────
+
+    async def on_member_join_antiraid(member: discord.Member):
+        guild = member.guild
+        cfg = get_guild_config(guild.id)
+
+        if not is_globally_whitelisted(member.id):
+            razon = is_globally_blacklisted(member.id)
+            if razon:
+                try:
+                    await member.ban(reason=f"Blacklist global: {razon}")
+                    record_log(guild.id, "moderacion", f"{EMOJIS['olhos70']} {member} detectado y baneado automáticamente (blacklist global: {razon})", "Sistema")
+                except discord.Forbidden:
+                    pass
+                return
+
+        if member.bot and cfg.get("bot_kicker_enabled"):
+            whitelist = set(cfg.get("bot_whitelist", []))
+            if str(member.id) not in whitelist:
+                try:
+                    await member.kick(reason="Bot no autorizado (no está en la whitelist del server)")
+                    record_log(guild.id, "moderacion", f"{EMOJIS['terminal']} Bot {member} expulsado automáticamente (no está en whitelist)", "Sistema")
+                except discord.Forbidden:
+                    pass
+
+    bot.add_listener(on_member_join_antiraid, "on_member_join")
+
+    async def on_message_moderacion_extra(message: discord.Message):
+        if message.author.bot or not message.guild:
+            return
+        if message.author.guild_permissions.administrator:
+            return
+        if is_globally_whitelisted(message.author.id):
+            return
+        if is_locally_whitelisted(message.guild.id, message.author.id):
+            return
+
+        cfg = get_guild_config(message.guild.id)
+        content_lower = message.content.lower()
+
+        for palabra in cfg.get("blacklist_words", []):
+            if palabra in content_lower:
+                try:
+                    await message.delete()
+                except discord.NotFound:
+                    pass
+                try:
+                    await message.channel.send(
+                        f"{EMOJIS['ban']} {message.author.mention}, ese mensaje contenía una palabra prohibida.",
+                        delete_after=6,
+                    )
+                except discord.Forbidden:
+                    pass
+                record_log(message.guild.id, "moderacion", f"🚫 Mensaje de {message.author} borrado (palabra prohibida: `{palabra}`)", "Sistema")
+                return
+
+        if cfg.get("antiscam_enabled") and message_has_scam_pattern(message.content):
+            try:
+                await message.delete()
+            except discord.NotFound:
+                pass
+            try:
+                if message.guild.me.guild_permissions.moderate_members and message.author.top_role < message.guild.me.top_role:
+                    await message.author.timeout(discord.utils.utcnow() + timedelta(hours=1), reason="Mensaje de estafa detectado")
+            except discord.Forbidden:
+                pass
+            try:
+                await message.channel.send(
+                    f"{EMOJIS['ban']} Se borró un mensaje de {message.author.mention} por parecer una estafa (nitro/cripto falso).",
+                    delete_after=8,
+                )
+            except discord.Forbidden:
+                pass
+            record_log(message.guild.id, "moderacion", f"🚨 Mensaje de estafa de {message.author} borrado y muteado 1h", "Sistema")
+            return
+
+        if cfg.get("antieveryone_enabled") and message.mention_everyone and not message.author.guild_permissions.mention_everyone:
+            try:
+                await message.delete()
+            except discord.NotFound:
+                pass
+            try:
+                await message.channel.send(
+                    f"{EMOJIS['ban']} {message.author.mention}, no tenés permiso para mencionar a todo el server.",
+                    delete_after=6,
+                )
+            except discord.Forbidden:
+                pass
+            record_log(message.guild.id, "moderacion", f"📢 {message.author} intentó usar @everyone/@here sin permiso (mensaje borrado)", "Sistema")
+            return
+
+    bot.add_listener(on_message_moderacion_extra, "on_message")
+
+    # ────────────────────────────────────────────────────────
+    #  PERSISTENCIA Y LOOP DE JAIL
+    # ────────────────────────────────────────────────────────
+
+    def _jail_get(guild_id: int) -> dict:
+        data = supabase_get(guild_id, "jail") or _load_json(JAIL_PATH).get(str(guild_id), {})
+        return data
+
+    def _jail_set(guild_id: int, data: dict) -> None:
+        if not supabase_set(guild_id, "jail", data):
+            all_data = _load_json(JAIL_PATH)
+            all_data[str(guild_id)] = data
+            _save_json(JAIL_PATH, all_data)
+
     async def _jail_expiry_loop():
         await bot.wait_until_ready()
         while not bot.is_closed():
@@ -481,7 +518,7 @@ def setup_moderacion_extra(
     bot.loop.create_task(_jail_expiry_loop())
 
     # ────────────────────────────────────────────────────────
-    #  SISTEMA DE TICKETS
+    #  SISTEMA DE TICKETS (VIEWS)
     # ────────────────────────────────────────────────────────
 
     class CloseTicketView(discord.ui.View):
@@ -535,7 +572,7 @@ def setup_moderacion_extra(
             staff_role_id = cfg.get("ticket_staff_role_id")
 
             if not category_id:
-                embed = build_embed(title="❌ Los tickets no están configurados", description="Un admin debe usar `/ticket-config` primero.", color=COLOR_WARN)
+                embed = build_embed(title="❌ Los tickets no están configurados", description="Un admin debe usar `/ticket config` primero.", color=COLOR_WARN)
                 return await interaction.response.send_message(embed=embed, ephemeral=True)
 
             existing = discord.utils.get(interaction.guild.text_channels, topic=f"ticket:{interaction.user.id}")
@@ -573,37 +610,5 @@ def setup_moderacion_extra(
             confirm = build_embed(title="✅ Ticket creado", description=channel.mention, color=COLOR_OK)
             await interaction.response.send_message(embed=confirm, ephemeral=True)
 
-    @bot.tree.command(name="ticket-config", description="[Admin] Configura la categoría y el rol de staff para los tickets.")
-    @app_commands.describe(categoria="Categoría donde se crean los tickets", rol_staff="Rol que puede ver y atender los tickets")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def ticket_config_cmd(interaction: discord.Interaction, categoria: discord.CategoryChannel, rol_staff: discord.Role):
-        cfg = get_guild_config(interaction.guild_id)
-        cfg["ticket_category_id"] = categoria.id
-        cfg["ticket_staff_role_id"] = rol_staff.id
-        update_guild_config(interaction.guild_id, cfg)
-        embed = build_embed(
-            title=f"{EMOJIS['checkmark']} Tickets configurados",
-            description=f"Categoría: {categoria.mention if hasattr(categoria, 'mention') else categoria.name}\nStaff: {rol_staff.mention}",
-            color=COLOR_OK,
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @bot.tree.command(name="ticket-panel", description="[Admin] Publica el panel para abrir tickets.")
-    @app_commands.describe(canal="Canal donde publicar (por defecto el actual)")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def ticket_panel_cmd(interaction: discord.Interaction, canal: discord.TextChannel | None = None):
-        target = canal or interaction.channel
-        embed = build_embed(
-            title=f"{EMOJIS['discorddevelopers']} Soporte — NEXUS",
-            description="¿Necesitás ayuda? Hacé clic en el botón para abrir un ticket privado con el staff.",
-            color=COLOR_MAIN,
-            footer=footer_text,
-        )
-        await target.send(embed=embed, view=TicketPanelView())
-        confirm = build_embed(title="✅ Panel publicado", description=f"Se publicó en {target.mention}.", color=COLOR_OK)
-        await interaction.response.send_message(embed=confirm, ephemeral=True)
-
-    # Registrar las views persistentes para que los botones sigan
-    # funcionando después de un reinicio del bot.
     bot.add_view(TicketPanelView())
     bot.add_view(CloseTicketView())

@@ -8,7 +8,7 @@ from collections import Counter
 
 import discord
 from keys_system import setup_keys_system
-# from moderacion_extra import setup_moderacion_extra  
+from moderacion_extra import setup_moderacion_extra  
 from discord import app_commands
 from discord.ext import commands
 from flask import Flask
