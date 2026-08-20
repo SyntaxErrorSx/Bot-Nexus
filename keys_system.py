@@ -318,7 +318,7 @@ def setup_keys_system(bot, Config, build_embed, colors: dict, footer_text: str, 
 
     KeysPanelView = build_keys_panel_view(_config_getter, build_embed, colors, footer_text, supabase_get, supabase_set)
 
-    @bot.tree.command(name="generar-key", description="[Admin] Genera y envía una key manualmente a un cliente.")
+    @bot.tree.command(name="generar-key", description="[Admin] Genera una key manualmente para un cliente (sin enviar correo).")
     @app_commands.describe(correo="Correo del cliente", nombre="Nombre del cliente", dias="Duración de la key en días")
     @app_commands.checks.has_permissions(administrator=True)
     async def generar_key_cmd(interaction: discord.Interaction, correo: str, nombre: str, dias: app_commands.Range[int, 1, 365] = 30):
@@ -333,18 +333,60 @@ def setup_keys_system(bot, Config, build_embed, colors: dict, footer_text: str, 
             embed = build_embed(title="❌ Error", description=f"No se pudo generar la key: `{e}`", color=colors["WARN"], footer=footer_text)
             return await interaction.followup.send(embed=embed, ephemeral=True)
 
-        emailed = send_key_email(correo, nombre, key, dias)
-
+        # ❌ NO SE ENVÍA CORREO (solo se genera la key)
         embed = build_embed(
             title="✅ Key generada",
             description=(
                 f"🔑 **Key:** `{key}`\n"
                 f"👤 **Cliente:** {nombre}\n"
-                f"📧 **Correo:** {correo} {'✅' if emailed else '⚠️ no se pudo enviar el correo'}\n"
-                f"📅 **Duración:** {dias} día(s)"
+                f"📧 **Correo:** {correo}\n"
+                f"📅 **Duración:** {dias} día(s)\n\n"
+                "📌 **Nota:** La key se ha generado correctamente. Entrégasela al cliente manualmente."
             ),
             color=colors["OK"],
             footer=footer_text,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @bot.tree.command(name="ver-keys", description="[Admin] Muestra todas las keys generadas.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def ver_keys_cmd(interaction: discord.Interaction):
+        """Muestra un listado de todas las keys generadas."""
+        if not _licenses_configured():
+            embed = build_embed(title="❌ Error", description="Supabase no está configurado.", color=colors["WARN"])
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        try:
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/{KEYS_TABLE}", headers=_service_headers(), timeout=15)
+            r.raise_for_status()
+            keys = r.json() if isinstance(r.json(), list) else []
+        except Exception as e:
+            embed = build_embed(title="❌ Error", description=f"No se pudieron obtener las keys: `{e}`", color=colors["WARN"])
+            return await interaction.followup.send(embed=embed, ephemeral=True)
+
+        if not keys:
+            embed = build_embed(title="📋 Keys generadas", description="No hay keys registradas aún.", color=colors["MAIN"])
+            return await interaction.followup.send(embed=embed, ephemeral=True)
+
+        # Mostrar últimas 25 keys
+        lines = []
+        for k in keys[-25:]:
+            key = k.get("key", "?")
+            email = k.get("email", "?")
+            days = k.get("duration_days", "?")
+            active = "✅ Activa" if k.get("is_active") else "❌ Inactiva"
+            hwid = k.get("registered_hwid") or "No registrado"
+            reset_count = k.get("reset_count", 0)
+            max_resets = k.get("max_resets", 5)
+            lines.append(f"🔑 `{key}` | {email} | {days}d | {active} | HWID: {hwid} | Resets: {reset_count}/{max_resets}")
+
+        embed = build_embed(
+            title=f"📋 Keys generadas ({len(keys)} total)",
+            description="\n".join(lines[-25:]),
+            color=colors["MAIN"],
+            footer=f"Mostrando últimas 25 keys · {len(keys)} total"
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 

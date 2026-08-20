@@ -8,6 +8,7 @@ from collections import Counter
 
 import discord
 from keys_system import setup_keys_system
+from moderacion_extra import setup_moderacion_extra
 from discord import app_commands
 from discord.ext import commands
 from flask import Flask
@@ -94,6 +95,10 @@ logs_lock = threading.Lock()
 
 MAX_LOGS_PER_GUILD = 300
 
+# ID del servidor exclusivo de Nexus Pro (equipo/staff). Comandos ligados a
+# Nexus Pro (legales, legales-free, enlace) solo funcionan acá.
+NEXUS_PRO_GUILD_ID = 1518751703019552948
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -140,6 +145,12 @@ DEFAULT_GUILD_CONFIG = {
     "antilink_enabled": False,
     "antispam_enabled": False,
     "suggestions_channel": None,
+    "level_enabled": False,
+    "level_channel_id": None,   # canal fijo para los embeds de "subió de nivel". Si es None, se manda en el canal donde el user habló/está hablando
+    "level_xp_min": 15,
+    "level_xp_max": 25,
+    "level_cooldown": 60,       # segundos entre mensajes que dan XP (anti-spam de XP)
+    "level_no_xp_channels": [], # canales donde NO se da XP
     "verify_enabled": False,
     "verify_role_id": None,
     "verify_unverified_role_id": None,
@@ -306,6 +317,105 @@ def track_command(guild_id: int | None, command_name: str) -> None:
     used = data[key].setdefault("commands_used", {})
     used[command_name] = used.get(command_name, 0) + 1
     save_stats(data)
+
+
+# ──────────────────────────────────────────────────────────────
+#  NIVELES / XP
+# ──────────────────────────────────────────────────────────────
+
+LEVELS_PATH = "levels.json"
+levels_lock = threading.Lock()
+
+# XP acumulada total necesaria para alcanzar `level` (fórmula estilo MEE6, curva progresiva)
+def xp_para_nivel(level: int) -> int:
+    return 5 * (level ** 2) + 50 * level + 100
+
+
+def nivel_desde_xp(xp: int) -> int:
+    level = 0
+    while xp >= xp_para_nivel(level + 1):
+        level += 1
+    return level
+
+
+def load_levels() -> dict:
+    with levels_lock:
+        if not os.path.exists(LEVELS_PATH):
+            return {}
+        with open(LEVELS_PATH, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return {}
+
+
+def save_levels(data: dict) -> None:
+    """Guarda niveles en Supabase y local"""
+    if supabase:
+        for guild_id, levels_data in data.items():
+            supabase_set(int(guild_id), "levels", levels_data)
+
+    with levels_lock:
+        tmp_path = LEVELS_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, LEVELS_PATH)
+
+
+def get_guild_levels(guild_id: int) -> dict:
+    """dict user_id(str) -> {"xp": int, "level": int, "last_xp_ts": float}"""
+    data = supabase_get(guild_id, "levels")
+    if data:
+        return data
+
+    data = load_levels()
+    key = str(guild_id)
+    if key not in data:
+        data[key] = {}
+        save_levels(data)
+    return data[key]
+
+
+def add_user_xp(guild_id: int, user_id: int, amount: int) -> tuple[int, int, bool]:
+    """Suma XP a un usuario. Devuelve (xp_total, nivel_nuevo, subio_de_nivel)."""
+    data = load_levels()
+    key = str(guild_id)
+    if key not in data:
+        data[key] = {}
+    user_key = str(user_id)
+    entry = data[key].setdefault(user_key, {"xp": 0, "level": 0, "last_xp_ts": 0})
+
+    old_level = entry.get("level", 0)
+    entry["xp"] = entry.get("xp", 0) + amount
+    entry["last_xp_ts"] = time.time()
+    new_level = nivel_desde_xp(entry["xp"])
+    entry["level"] = new_level
+
+    save_levels(data)
+    return entry["xp"], new_level, new_level > old_level
+
+
+def get_user_level_data(guild_id: int, user_id: int) -> dict:
+    levels = get_guild_levels(guild_id)
+    return levels.get(str(user_id), {"xp": 0, "level": 0, "last_xp_ts": 0})
+
+
+def set_user_level_data(guild_id: int, user_id: int, xp: int) -> int:
+    """Setea la XP de un usuario a mano (admin) y devuelve el nivel resultante."""
+    data = load_levels()
+    key = str(guild_id)
+    if key not in data:
+        data[key] = {}
+    level = nivel_desde_xp(xp)
+    data[key][str(user_id)] = {"xp": xp, "level": level, "last_xp_ts": time.time()}
+    save_levels(data)
+    return level
+
+
+def get_guild_ranking(guild_id: int, top: int = 10) -> list[tuple[str, dict]]:
+    levels = get_guild_levels(guild_id)
+    ordenado = sorted(levels.items(), key=lambda kv: kv[1].get("xp", 0), reverse=True)
+    return ordenado[:top]
 
 
 # ──────────────────────────────────────────────────────────────
@@ -885,6 +995,28 @@ async def get_log_channel(guild: discord.Guild, tipo: str) -> discord.TextChanne
         return None
     channel = guild.get_channel(int(channel_id))
     return channel
+
+
+def is_nexus_pro_guild(interaction: discord.Interaction) -> bool:
+    """True solo si el comando se está usando en el server oficial de Nexus Pro."""
+    return interaction.guild_id == NEXUS_PRO_GUILD_ID
+
+
+async def block_if_not_nexus_pro_guild(interaction: discord.Interaction) -> bool:
+    """Si el comando NO se está usando en el server de Nexus Pro, responde con un
+    error y devuelve True (o sea: 'bloqueá acá, no sigas'). Si está OK, devuelve False."""
+    if not is_nexus_pro_guild(interaction):
+        embed = build_embed(
+            title="🔒 Comando exclusivo de Nexus Pro",
+            description=(
+                "Este comando es exclusivo del servidor oficial de **Nexus Pro** "
+                "y no está disponible en este server."
+            ),
+            color=COLOR_WARN,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return True
+    return False
 
 
 def check_user_roles(member: discord.Member) -> dict:
@@ -3031,6 +3163,8 @@ async def on_message_delete(message: discord.Message):
 @bot.tree.command(name="legales", description="[Privado] Muestra los Términos y Condiciones de Nexus Pro (Beta).")
 @app_commands.checks.cooldown(1, 10.0)
 async def legales(interaction: discord.Interaction):
+    if await block_if_not_nexus_pro_guild(interaction):
+        return
     track_command(interaction.guild_id, "legales")
     
     # ✅ VERIFICAR ROLES
@@ -3071,6 +3205,8 @@ async def legales(interaction: discord.Interaction):
 @bot.tree.command(name="legales-free", description="📜 Muestra los Términos y Condiciones de Nexus Core (Versión Gratuita).")
 @app_commands.checks.cooldown(1, 10.0)
 async def legales_free(interaction: discord.Interaction):
+    if await block_if_not_nexus_pro_guild(interaction):
+        return
     track_command(interaction.guild_id, "legales-free")
     
     embed = build_embed(
@@ -3146,6 +3282,8 @@ async def legales_free(interaction: discord.Interaction):
 @bot.tree.command(name="enlace", description="Muestra el enlace vigente del instalador de Pro.")
 @app_commands.checks.cooldown(1, 10.0)
 async def enlace(interaction: discord.Interaction):
+    if await block_if_not_nexus_pro_guild(interaction):
+        return
     track_command(interaction.guild_id, "enlace")
 
     if not isinstance(interaction.user, discord.Member):
@@ -7042,7 +7180,43 @@ async def on_message(message: discord.Message):
                         )
                     except:
                         pass
-    
+
+        # ------------------
+        # NIVELES / XP
+        # ------------------
+        if guild_cfg.get("level_enabled"):
+            if message.channel.id not in (guild_cfg.get("level_no_xp_channels") or []):
+                cooldown = guild_cfg.get("level_cooldown", 60)
+                current = get_user_level_data(message.guild.id, message.author.id)
+                last_ts = current.get("last_xp_ts", 0)
+
+                if time.time() - last_ts >= cooldown:
+                    xp_min = guild_cfg.get("level_xp_min", 15)
+                    xp_max = guild_cfg.get("level_xp_max", 25)
+                    ganada = random.randint(min(xp_min, xp_max), max(xp_min, xp_max))
+                    _, nuevo_nivel, subio = add_user_xp(message.guild.id, message.author.id, ganada)
+
+                    if subio:
+                        destino = None
+                        level_channel_id = guild_cfg.get("level_channel_id")
+                        if level_channel_id:
+                            destino = message.guild.get_channel(int(level_channel_id))
+                        if destino is None:
+                            # No hay canal configurado (o no se encontró): se manda donde está hablando
+                            destino = message.channel
+
+                        embed = build_embed(
+                            title="🎉 ¡Subida de nivel!",
+                            description=f"{message.author.mention} alcanzó el **nivel {nuevo_nivel}** 🚀",
+                            color=COLOR_PURPLE,
+                            thumbnail=message.author.display_avatar.url,
+                            footer="Nexus Levels",
+                        )
+                        try:
+                            await destino.send(embed=embed)
+                        except (discord.Forbidden, discord.HTTPException):
+                            pass
+
     # Procesar comandos normalmente
     await bot.process_commands(message)
 
@@ -8295,6 +8469,165 @@ async def purge_usuario_cmd(interaction: discord.Interaction, usuario: discord.M
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
+# ==========================================================
+# SISTEMA DE NIVELES / XP
+# ==========================================================
+
+@bot.tree.command(name="config-niveles", description="[Admin] Activa/desactiva y configura el sistema de niveles.")
+@app_commands.describe(
+    estado="Activar o desactivar el sistema de niveles",
+    canal="Canal fijo para los embeds de subida de nivel (si lo dejás vacío, se avisa en el canal donde habla el user)",
+    xp_min="XP mínima por mensaje (default 15)",
+    xp_max="XP máxima por mensaje (default 25)",
+    cooldown="Segundos de espera entre mensajes que dan XP (default 60)",
+)
+@app_commands.choices(estado=[
+    app_commands.Choice(name="Activar", value="activar"),
+    app_commands.Choice(name="Desactivar", value="desactivar"),
+])
+@app_commands.checks.has_permissions(administrator=True)
+async def config_niveles_cmd(
+    interaction: discord.Interaction,
+    estado: app_commands.Choice[str] | None = None,
+    canal: discord.TextChannel | None = None,
+    xp_min: app_commands.Range[int, 1, 1000] | None = None,
+    xp_max: app_commands.Range[int, 1, 1000] | None = None,
+    cooldown: app_commands.Range[int, 0, 3600] | None = None,
+):
+    track_command(interaction.guild_id, "config-niveles")
+    cfg = get_guild_config(interaction.guild_id)
+
+    if estado is not None:
+        cfg["level_enabled"] = (estado.value == "activar")
+    if canal is not None:
+        cfg["level_channel_id"] = canal.id
+    if xp_min is not None:
+        cfg["level_xp_min"] = xp_min
+    if xp_max is not None:
+        cfg["level_xp_max"] = xp_max
+    if cooldown is not None:
+        cfg["level_cooldown"] = cooldown
+
+    update_guild_config(interaction.guild_id, cfg)
+
+    canal_texto = "el canal donde el usuario esté hablando (sin canal fijo)"
+    if cfg.get("level_channel_id"):
+        ch = interaction.guild.get_channel(int(cfg["level_channel_id"]))
+        canal_texto = ch.mention if ch else "un canal que ya no existe (revisalo)"
+
+    embed = build_embed(
+        title="✅ Sistema de niveles actualizado",
+        description="Configuración actual del sistema de niveles:",
+        color=COLOR_OK,
+        fields=[
+            ("Estado", "🟢 Activado" if cfg.get("level_enabled") else "🔴 Desactivado", True),
+            ("Canal de aviso", canal_texto, True),
+            ("XP por mensaje", f"{cfg.get('level_xp_min', 15)} - {cfg.get('level_xp_max', 25)}", True),
+            ("Cooldown", f"{cfg.get('level_cooldown', 60)}s", True),
+        ],
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="config-niveles-canal-excluir", description="[Admin] Excluye o vuelve a incluir un canal del sistema de XP.")
+@app_commands.describe(canal="Canal a excluir/incluir de la ganancia de XP")
+@app_commands.checks.has_permissions(administrator=True)
+async def config_niveles_canal_excluir_cmd(interaction: discord.Interaction, canal: discord.TextChannel):
+    track_command(interaction.guild_id, "config-niveles-canal-excluir")
+    cfg = get_guild_config(interaction.guild_id)
+    excluidos = cfg.setdefault("level_no_xp_channels", [])
+
+    if canal.id in excluidos:
+        excluidos.remove(canal.id)
+        accion = "vuelve a dar XP"
+    else:
+        excluidos.append(canal.id)
+        accion = "ya NO da XP"
+
+    update_guild_config(interaction.guild_id, cfg)
+    embed = build_embed(
+        title="✅ Canal actualizado",
+        description=f"El canal {canal.mention} ahora **{accion}**.",
+        color=COLOR_OK,
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="nivel", description="🏆 Muestra tu nivel y XP (o el de otro usuario).")
+@app_commands.describe(usuario="Usuario a consultar (por defecto vos)")
+async def nivel_cmd(interaction: discord.Interaction, usuario: discord.Member | None = None):
+    track_command(interaction.guild_id, "nivel")
+    objetivo = usuario or interaction.user
+    data = get_user_level_data(interaction.guild_id, objetivo.id)
+
+    xp = data.get("xp", 0)
+    nivel = data.get("level", 0)
+    xp_siguiente_nivel = xp_para_nivel(nivel + 1)
+    faltan = max(0, xp_siguiente_nivel - xp)
+
+    ranking = get_guild_ranking(interaction.guild_id, top=1000)
+    posicion = next((i + 1 for i, (uid, _) in enumerate(ranking) if uid == str(objetivo.id)), None)
+
+    embed = build_embed(
+        title=f"🏆 Nivel de {objetivo.display_name}",
+        color=COLOR_PURPLE,
+        thumbnail=objetivo.display_avatar.url,
+        fields=[
+            ("Nivel", str(nivel), True),
+            ("XP total", str(xp), True),
+            ("Posición en el ranking", f"#{posicion}" if posicion else "Sin datos", True),
+            ("Para el próximo nivel", f"Faltan **{faltan}** XP", False),
+        ],
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="ranking-niveles", description="📊 Muestra el top de usuarios con más nivel/XP del servidor.")
+async def ranking_niveles_cmd(interaction: discord.Interaction):
+    track_command(interaction.guild_id, "ranking-niveles")
+    await interaction.response.defer()
+
+    ranking = get_guild_ranking(interaction.guild_id, top=10)
+    if not ranking:
+        embed = build_embed(
+            title="📊 Ranking de niveles",
+            description="Todavía no hay nadie con XP en este servidor.",
+            color=COLOR_WARN,
+        )
+        return await interaction.followup.send(embed=embed)
+
+    medallas = ["🥇", "🥈", "🥉"]
+    lineas = []
+    for i, (user_id, entry) in enumerate(ranking):
+        prefijo = medallas[i] if i < 3 else f"`#{i + 1}`"
+        miembro = interaction.guild.get_member(int(user_id))
+        nombre = miembro.mention if miembro else f"Usuario `{user_id}`"
+        lineas.append(f"{prefijo} {nombre} — Nivel **{entry.get('level', 0)}** ({entry.get('xp', 0)} XP)")
+
+    embed = build_embed(
+        title="📊 Ranking de niveles",
+        description="\n".join(lineas),
+        color=COLOR_PURPLE,
+        footer="Nexus Levels",
+    )
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="nivel-set", description="[Admin] Setea manualmente la XP de un usuario.")
+@app_commands.describe(usuario="Usuario a modificar", xp="XP total a asignar")
+@app_commands.checks.has_permissions(administrator=True)
+async def nivel_set_cmd(interaction: discord.Interaction, usuario: discord.Member, xp: app_commands.Range[int, 0, 10_000_000]):
+    track_command(interaction.guild_id, "nivel-set")
+    nuevo_nivel = set_user_level_data(interaction.guild_id, usuario.id, xp)
+
+    embed = build_embed(
+        title="✅ XP actualizada",
+        description=f"{usuario.mention} ahora tiene **{xp} XP** (nivel **{nuevo_nivel}**).",
+        color=COLOR_OK,
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 app = Flask(__name__)
 
 @app.route("/")
@@ -8360,6 +8693,25 @@ KeysPanelView = setup_keys_system(
     footer_text=BOT_FOOTER_TEXT,
     supabase_get=supabase_get,
     supabase_set=supabase_set,
+)
+
+# ──────────────────────────────────────────────────────────────
+#  MODERACIÓN EXTRA (emojis custom, blacklist de palabras, anti-scam,
+#  anti-@everyone, kicker de bots no verificados, whitelist local/global,
+#  blacklist global, jail y sistema de tickets)
+# ──────────────────────────────────────────────────────────────
+
+setup_moderacion_extra(
+    bot=bot,
+    Config=Config,
+    build_embed=build_embed,
+    colors={"MAIN": COLOR_MAIN, "OK": COLOR_OK, "WARN": COLOR_WARN, "AMBER": COLOR_AMBER},
+    footer_text=BOT_FOOTER_TEXT,
+    supabase_get=supabase_get,
+    supabase_set=supabase_set,
+    get_guild_config=get_guild_config,
+    update_guild_config=update_guild_config,
+    record_log=record_log,
 )
 
 # ──────────────────────────────────────────────────────────────
