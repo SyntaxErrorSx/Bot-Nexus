@@ -17,6 +17,12 @@
       "descripcion": "CommandInvokeError: Command 'actualizar-enlace' raised an exception: HTTPException: 400 Bad Request (error code: 40060): Interaction has already been acknowledged.",
       "autor": "_nyx_uk",
       "timestamp": "2026-08-16T00:46:30.254961+00:00"
+    },
+    {
+      "tipo": "error",
+      "descripcion": "CommandInvokeError: Command 'panel-keys' raised an exception: HTTPException: 400 Bad Request (error code: 40060): Interaction has already been acknowledged.",
+      "autor": "_nyx_uk",
+      "timestamp": "2026-08-20T15:41:32.878154+00:00"
     }
   ]
 }
