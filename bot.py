@@ -8,7 +8,7 @@ from collections import Counter
 
 import discord
 from keys_system import setup_keys_system
-from moderacion_extra import setup_moderacion_extra
+# from moderacion_extra import setup_moderacion_extra  
 from discord import app_commands
 from discord.ext import commands
 from flask import Flask
@@ -8696,23 +8696,21 @@ KeysPanelView = setup_keys_system(
 )
 
 # ──────────────────────────────────────────────────────────────
-#  MODERACIÓN EXTRA (emojis custom, blacklist de palabras, anti-scam,
-#  anti-@everyone, kicker de bots no verificados, whitelist local/global,
-#  blacklist global, jail y sistema de tickets)
+#  MODERACIÓN EXTRA (COMENTADO TEMPORALMENTE)
 # ──────────────────────────────────────────────────────────────
 
-setup_moderacion_extra(
-    bot=bot,
-    Config=Config,
-    build_embed=build_embed,
-    colors={"MAIN": COLOR_MAIN, "OK": COLOR_OK, "WARN": COLOR_WARN, "AMBER": COLOR_AMBER},
-    footer_text=BOT_FOOTER_TEXT,
-    supabase_get=supabase_get,
-    supabase_set=supabase_set,
-    get_guild_config=get_guild_config,
-    update_guild_config=update_guild_config,
-    record_log=record_log,
-)
+# setup_moderacion_extra(
+#     bot=bot,
+#     Config=Config,
+#     build_embed=build_embed,
+#     colors={"MAIN": COLOR_MAIN, "OK": COLOR_OK, "WARN": COLOR_WARN, "AMBER": COLOR_AMBER},
+#     footer_text=BOT_FOOTER_TEXT,
+#     supabase_get=supabase_get,
+#     supabase_set=supabase_set,
+#     get_guild_config=get_guild_config,
+#     update_guild_config=update_guild_config,
+#     record_log=record_log,
+# )
 
 # ──────────────────────────────────────────────────────────────
 #  MAIN
