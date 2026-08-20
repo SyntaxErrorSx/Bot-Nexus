@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from collections import Counter
 
 import discord
+from keys_system import setup_keys_system
 from discord import app_commands
 from discord.ext import commands
 from flask import Flask
@@ -2204,6 +2205,12 @@ async def on_ready():
         print("✅ Vista persistente de verificación registrada")
     except Exception as e:
         print(f"❌ Error registrando vistas persistentes: {e}")
+
+    try:
+        bot.add_view(KeysPanelView())
+        print("✅ Vista persistente del panel de keys registrada")
+    except Exception as e:
+        print(f"❌ Error registrando la vista del panel de keys: {e}")
 
     try:
         total_paneles = register_autorole_panels()
@@ -4877,7 +4884,7 @@ async def nexus_free_public(interaction: discord.Interaction):
 async def pagina_web(interaction: discord.Interaction):
     track_command(interaction.guild_id, "pagina-web")
     
-    URL_WEB = "https://proyect-nexus.vercel.app"
+    URL_WEB = "https://nexusforgex.vercel.app"
     
     record_log(
         interaction.guild_id, 
@@ -8340,6 +8347,20 @@ def start_keep_alive():
     thread = threading.Thread(target=auto_keep_alive, daemon=True)
     thread.start()
     print("🔥 Keep-alive iniciado (ping cada 5 minutos)")
+
+# ──────────────────────────────────────────────────────────────
+#  SISTEMA DE KEYS
+# ──────────────────────────────────────────────────────────────
+
+KeysPanelView = setup_keys_system(
+    bot=bot,
+    Config=Config,
+    build_embed=build_embed,
+    colors={"MAIN": COLOR_MAIN, "OK": COLOR_OK, "WARN": COLOR_WARN},
+    footer_text=BOT_FOOTER_TEXT,
+    supabase_get=supabase_get,
+    supabase_set=supabase_set,
+)
 
 # ──────────────────────────────────────────────────────────────
 #  MAIN
