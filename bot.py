@@ -53,7 +53,14 @@ def supabase_get(guild_id: int, table: str) -> dict | None:
     if not supabase:
         return None
     try:
-        result = supabase.table(table).select("*").eq("guild_id", str(guild_id)).execute()
+        result = (
+            supabase.table(table)
+            .select("*")
+            .eq("guild_id", str(guild_id))
+            .order("id", desc=True)
+            .limit(1)
+            .execute()
+        )
         if result.data and len(result.data) > 0:
             return result.data[0].get("data", {})
         return None
@@ -62,14 +69,29 @@ def supabase_get(guild_id: int, table: str) -> dict | None:
         return None
 
 def supabase_set(guild_id: int, table: str, data: dict) -> bool:
-    """Guarda datos en Supabase"""
+    """Guarda datos en Supabase.
+
+    ✅ FIX: antes usaba upsert({"guild_id":..., "data":...}) sin pasar "id".
+    Como la primary key real de estas tablas es "id" (no "guild_id"), Postgrest
+    resuelve el conflicto de upsert contra "id" — y como nunca mandamos un id,
+    NUNCA hay conflicto, así que cada guardado insertaba una fila NUEVA en vez
+    de actualizar la del guild. supabase_get() sigue leyendo con
+    .eq("guild_id", ...) y se queda con result.data[0], que según el orden que
+    devuelva Postgrest puede ser una fila vieja — por eso "no se guardaba" el
+    progreso (en realidad sí se guardaba, pero en una fila que después no se
+    leía). Ahora: buscamos si ya existe una fila para ese guild_id y hacemos
+    UPDATE puntual por "id"; si no existe, recién ahí hacemos INSERT. Así
+    siempre hay una sola fila por guild en cada tabla.
+    """
     if not supabase:
         return False
     try:
-        supabase.table(table).upsert({
-            "guild_id": str(guild_id),
-            "data": data
-        }).execute()
+        existing = supabase.table(table).select("id").eq("guild_id", str(guild_id)).execute()
+        if existing.data and len(existing.data) > 0:
+            row_id = existing.data[0]["id"]
+            supabase.table(table).update({"data": data}).eq("id", row_id).execute()
+        else:
+            supabase.table(table).insert({"guild_id": str(guild_id), "data": data}).execute()
         return True
     except Exception as e:
         print(f"❌ Error Supabase SET ({table}): {e}")
@@ -198,12 +220,25 @@ def save_config(data: dict) -> None:
 
 
 def get_guild_config(guild_id: int) -> dict:
-    """Carga configuración desde Supabase o archivo local"""
+    """Carga configuración desde Supabase o archivo local.
+
+    ✅ FIX: cuando la fila venía de Supabase, se devolvía tal cual, SIN pasar
+    por _deep_merge_defaults(). Resultado: cualquier config vieja en Supabase
+    (creada antes de agregar una feature nueva, ej. level_enabled,
+    antiscam_enabled, blacklist_words, etc.) se quedaba para siempre sin esas
+    keys → guild_cfg.get("level_enabled") daba None y esa feature no
+    funcionaba en ESE server aunque el código estuviera bien, hasta que
+    alguien corriera un comando que la seteara a mano. Ahora se mergean los
+    defaults también acá, y si eso agregó keys nuevas se persiste de vuelta.
+    """
     # Intentar desde Supabase
     data = supabase_get(guild_id, "config")
     if data:
-        return data
-    
+        merged = _deep_merge_defaults(data, DEFAULT_GUILD_CONFIG)
+        if merged != data:
+            update_guild_config(guild_id, merged)
+        return merged
+
     # Fallback a archivo local
     data = load_config()
     key = str(guild_id)
@@ -217,6 +252,11 @@ def get_guild_config(guild_id: int) -> dict:
             default["roles_enlace"].append(Config.VIP_ROLE_ID)
         data[key] = default
         save_config(data)
+        # ✅ FIX: antes esto solo se guardaba en el archivo local, así que la
+        # fila de "config" en Supabase para un guild nuevo no se creaba hasta
+        # que alguien corriera un comando de config a mano.
+        if supabase:
+            supabase_set(guild_id, "config", default)
         return data[key]
     data[key] = _deep_merge_defaults(data[key], DEFAULT_GUILD_CONFIG)
     return data[key]
