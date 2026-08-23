@@ -296,27 +296,41 @@ def get_guild_stats(guild_id: int) -> dict:
     data[key] = _deep_merge_defaults(data[key], DEFAULT_GUILD_STATS)
     return data[key]
 
-def bump_stat(guild_id: int, field: str, amount: int = 1) -> None:
+def save_guild_stats(guild_id: int, stats_data: dict) -> None:
+    """Guarda las stats de UN solo guild en Supabase y local, sin pisar las
+    de otros guilds (mismo motivo que save_guild_levels(): bump_stat() y
+    track_command() usaban load_stats()/save_stats(), que parten del ARCHIVO
+    LOCAL completo. Con disco efímero (Render, etc.) eso borraba en Supabase
+    las estadísticas de todos los demás servidores tras cada reinicio)."""
+    if supabase:
+        supabase_set(guild_id, "stats", stats_data)
+
     data = load_stats()
-    key = str(guild_id)
-    if key not in data:
-        data[key] = json.loads(json.dumps(DEFAULT_GUILD_STATS))
-    data[key] = _deep_merge_defaults(data[key], DEFAULT_GUILD_STATS)
-    data[key][field] = data[key].get(field, 0) + amount
-    save_stats(data)
+    data[str(guild_id)] = stats_data
+    with stats_lock:
+        tmp_path = STATS_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, STATS_PATH)
+
+
+def bump_stat(guild_id: int, field: str, amount: int = 1) -> None:
+    # ✅ FIX: partir de get_guild_stats() (Supabase primero) en vez de
+    # load_stats() (solo archivo local). Ver save_guild_stats().
+    stats = get_guild_stats(guild_id)
+    stats[field] = stats.get(field, 0) + amount
+    save_guild_stats(guild_id, stats)
 
 
 def track_command(guild_id: int | None, command_name: str) -> None:
     if guild_id is None:
         return
-    data = load_stats()
-    key = str(guild_id)
-    if key not in data:
-        data[key] = json.loads(json.dumps(DEFAULT_GUILD_STATS))
-    data[key] = _deep_merge_defaults(data[key], DEFAULT_GUILD_STATS)
-    used = data[key].setdefault("commands_used", {})
+    # ✅ FIX: mismo motivo que bump_stat — ver save_guild_stats().
+    stats = get_guild_stats(guild_id)
+    used = stats.setdefault("commands_used", {})
     used[command_name] = used.get(command_name, 0) + 1
-    save_stats(data)
+    save_guild_stats(guild_id, stats)
+
 
 
 # ──────────────────────────────────────────────────────────────
@@ -376,14 +390,45 @@ def get_guild_levels(guild_id: int) -> dict:
     return data[key]
 
 
+def save_guild_levels(guild_id: int, guild_levels: dict) -> None:
+    """Guarda los niveles de UN solo guild en Supabase y local, sin pisar los
+    datos de otros guilds/usuarios.
+
+    ✅ FIX (esto era el motivo de que no se guardaran los niveles en Supabase):
+    add_user_xp() y set_user_level_data() usaban load_levels()/save_levels(),
+    que leen y escriben el ARCHIVO LOCAL completo (todos los guilds juntos).
+    En Render (y en la mayoría de hostings gratuitos) el disco es efímero:
+    cada reinicio del bot borra levels.json. Como add_user_xp() partía de ese
+    archivo local — vacío justo después de un reinicio — y después empujaba
+    TODO ese dict a Supabase, cada vez que alguien ganaba XP después de un
+    reinicio se pisaba en Supabase el progreso de TODOS los demás usuarios
+    de ESE guild (quedaban solo los que habían hablado desde el reinicio).
+    Por eso los niveles "se resetean"/"no se guardan": no es que Supabase no
+    reciba el write, es que recibe un write que borra lo anterior.
+
+    Ahora se actualiza puntualmente solo el guild afectado, partiendo siempre
+    de Supabase como fuente de verdad (vía get_guild_levels), así nunca se
+    sobreescribe con datos incompletos.
+    """
+    if supabase:
+        supabase_set(guild_id, "levels", guild_levels)
+
+    data = load_levels()
+    data[str(guild_id)] = guild_levels
+    with levels_lock:
+        tmp_path = LEVELS_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, LEVELS_PATH)
+
+
 def add_user_xp(guild_id: int, user_id: int, amount: int) -> tuple[int, int, bool]:
     """Suma XP a un usuario. Devuelve (xp_total, nivel_nuevo, subio_de_nivel)."""
-    data = load_levels()
-    key = str(guild_id)
-    if key not in data:
-        data[key] = {}
+    # ✅ FIX: partir de get_guild_levels() (Supabase primero) en vez de
+    # load_levels() (solo archivo local). Ver save_guild_levels() para el detalle.
+    guild_levels = get_guild_levels(guild_id)
     user_key = str(user_id)
-    entry = data[key].setdefault(user_key, {"xp": 0, "level": 0, "last_xp_ts": 0})
+    entry = guild_levels.setdefault(user_key, {"xp": 0, "level": 0, "last_xp_ts": 0})
 
     old_level = entry.get("level", 0)
     entry["xp"] = entry.get("xp", 0) + amount
@@ -391,7 +436,7 @@ def add_user_xp(guild_id: int, user_id: int, amount: int) -> tuple[int, int, boo
     new_level = nivel_desde_xp(entry["xp"])
     entry["level"] = new_level
 
-    save_levels(data)
+    save_guild_levels(guild_id, guild_levels)
     return entry["xp"], new_level, new_level > old_level
 
 
@@ -402,13 +447,11 @@ def get_user_level_data(guild_id: int, user_id: int) -> dict:
 
 def set_user_level_data(guild_id: int, user_id: int, xp: int) -> int:
     """Setea la XP de un usuario a mano (admin) y devuelve el nivel resultante."""
-    data = load_levels()
-    key = str(guild_id)
-    if key not in data:
-        data[key] = {}
+    # ✅ FIX: mismo motivo que add_user_xp — ver save_guild_levels().
+    guild_levels = get_guild_levels(guild_id)
     level = nivel_desde_xp(xp)
-    data[key][str(user_id)] = {"xp": xp, "level": level, "last_xp_ts": time.time()}
-    save_levels(data)
+    guild_levels[str(user_id)] = {"xp": xp, "level": level, "last_xp_ts": time.time()}
+    save_guild_levels(guild_id, guild_levels)
     return level
 
 
@@ -433,14 +476,17 @@ def load_logs() -> dict:
                 return {}
 
 
-def save_logs(data: dict) -> None:
-    """Guarda logs en Supabase y local"""
-    # Guardar en Supabase
+def save_guild_logs(guild_id: int, entries: list[dict]) -> None:
+    """Guarda los logs de UN solo guild en Supabase y local, sin pisar los
+    de otros guilds (mismo motivo que save_guild_levels()/save_guild_stats():
+    record_log() usaba load_logs()/save_logs(), que parten del ARCHIVO LOCAL
+    completo. Con disco efímero eso borraba en Supabase el historial de
+    todos los demás servidores tras cada reinicio)."""
     if supabase:
-        for guild_id, logs_data in data.items():
-            supabase_set(int(guild_id), "logs", logs_data)
-    
-    # Guardar en archivo local
+        supabase_set(guild_id, "logs", entries)
+
+    data = load_logs()
+    data[str(guild_id)] = entries
     with logs_lock:
         tmp_path = LOGS_PATH + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -448,10 +494,19 @@ def save_logs(data: dict) -> None:
         os.replace(tmp_path, LOGS_PATH)
 
 
-def record_log(guild_id: int, tipo: str, descripcion: str, autor: str | None = None) -> None:
+def _load_guild_logs_raw(guild_id: int) -> list[dict]:
+    """Trae los logs (sin invertir/filtrar) de UN guild, priorizando Supabase."""
+    data = supabase_get(guild_id, "logs")
+    if data and isinstance(data, list):
+        return data
     data = load_logs()
-    key = str(guild_id)
-    entries = data.get(key, [])
+    return data.get(str(guild_id), [])
+
+
+def record_log(guild_id: int, tipo: str, descripcion: str, autor: str | None = None) -> None:
+    # ✅ FIX: partir de _load_guild_logs_raw() (Supabase primero) en vez de
+    # load_logs() (solo archivo local). Ver save_guild_logs().
+    entries = _load_guild_logs_raw(guild_id)
     entries.append({
         "tipo": tipo,
         "descripcion": descripcion,
@@ -459,8 +514,8 @@ def record_log(guild_id: int, tipo: str, descripcion: str, autor: str | None = N
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
     entries = entries[-MAX_LOGS_PER_GUILD:]
-    data[key] = entries
-    save_logs(data)
+    save_guild_logs(guild_id, entries)
+
 
 
 def get_logs(guild_id: int, tipo: str | None = None) -> list[dict]:
