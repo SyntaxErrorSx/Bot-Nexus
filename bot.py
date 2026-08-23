@@ -7083,6 +7083,27 @@ async def on_message(message: discord.Message):
         if trap_channel_id and message.channel.id == trap_channel_id:
             # Exclude Owner and Admins
             if message.author.id != Config.OWNER_ID and not message.author.guild_permissions.administrator:
+                TRAP_BANNER_URL = "https://media.discordapp.net/attachments/1522648873636724861/1539069310411087912/hm5mn54.gif?ex=6a8c39be&is=6a8ae83e&hm=e2ba84660cf911982077ab2f5bd9ddb4af7a256d243e80d44935f7f2da36fda7&"
+
+                # Avisar al usuario por DM ANTES de banearlo (una vez baneado ya no
+                # se le puede mandar DM porque no comparte servidor con el bot).
+                try:
+                    dm_embed = build_embed(
+                        title="🚫 Fuiste baneado",
+                        description=(
+                            "Fuiste **baneado** por mandar un mensaje en el "
+                            "**Canal de Detección de Cuentas Comprometidas** "
+                            "(también conocido como **Canal Trampa**)."
+                        ),
+                        color=Config.COLOR_ERROR,
+                        image=TRAP_BANNER_URL,
+                    )
+                    await message.author.send(embed=dm_embed)
+                except (discord.Forbidden, discord.HTTPException):
+                    # El usuario tiene los DMs cerrados o algo falló al mandarlo;
+                    # no debe frenar el baneo por esto.
+                    pass
+
                 try:
                     await message.delete()
                     await message.author.ban(reason="Cuenta comprometida / Mensaje en Canal Trampa 🥀")
@@ -7095,7 +7116,8 @@ async def on_message(message: discord.Message):
                             embed_trap = build_embed(
                                 title="🚨 ALERTA: CANAL TRAMPA",
                                 description=f"El usuario **{message.author}** ({message.author.id}) ha sido **BANEADO** por interactuar en el canal trampa {message.channel.mention}.",
-                                color=Config.COLOR_ERROR
+                                color=Config.COLOR_ERROR,
+                                image=TRAP_BANNER_URL,
                             )
                             await log_ch.send(embed=embed_trap)
                 except discord.Forbidden:
