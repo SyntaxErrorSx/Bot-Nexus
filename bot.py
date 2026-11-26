@@ -14,6 +14,9 @@ from discord.ext import commands
 from flask import Flask
 from dotenv import load_dotenv
 from config import Config
+from nexus_ui import banner, animated, style_embed, setup_ui
+import firebase_admin
+from firebase_admin import credentials, firestore
 import asyncio
 import functools
 import random
@@ -26,6 +29,19 @@ import string
 import io
 
 load_dotenv()
+
+FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+firebase_db = None
+if FIREBASE_SERVICE_ACCOUNT_JSON:
+    try:
+        service_account_info = json.loads(FIREBASE_SERVICE_ACCOUNT_JSON)
+        firebase_admin.initialize_app(credentials.Certificate(service_account_info))
+        firebase_db = firestore.client()
+        print("✅ Firebase Admin conectado")
+    except Exception as e:
+        print(f"⚠️ No se pudo conectar Firebase Admin: {e}")
+else:
+    print("⚠️ Firebase Admin no configurado; las acciones Nexus+ y Coins estarán desactivadas.")
 
 # ──────────────────────────────────────────────────────────────
 #  CONEXIÓN A SUPABASE
@@ -127,6 +143,8 @@ intents.members = True
 intents.guilds = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+nexus_group = app_commands.Group(name="nexus", description="Herramientas y utilidades de Nexus System.")
+bot.tree.add_command(nexus_group)
 BOT_START_TIME = time.time()
 
 # ──────────────────────────────────────────────────────────────
@@ -1025,13 +1043,17 @@ async def apply_verification(member: discord.Member, cfg: dict) -> bool:
 #  COLORES / HELPERS
 # ──────────────────────────────────────────────────────────────
 
-COLOR_MAIN = discord.Color.from_rgb(88, 101, 242)
-COLOR_OK = discord.Color.from_rgb(87, 242, 135)
-COLOR_WARN = discord.Color.from_rgb(237, 66, 69)
+COLOR_MAIN = discord.Color.from_rgb(116, 104, 255)
+COLOR_OK = discord.Color.from_rgb(45, 212, 191)
+COLOR_WARN = discord.Color.from_rgb(251, 113, 133)
 COLOR_AMBER = discord.Color.from_rgb(255, 176, 71)
 COLOR_PURPLE = discord.Color.from_rgb(168, 85, 247)
 
-BOT_FOOTER_TEXT = "Nexus System"
+BOT_FOOTER_TEXT = "NEXUS SYSTEM  •  Nexus Studios"
+
+
+def nexus_embed(*args, **kwargs):
+    return style_embed(discord.Embed(*args, **kwargs), bot)
 
 
 def build_embed(
@@ -1048,7 +1070,7 @@ def build_embed(
     author_icon: str | None = None,
     timestamp: bool = True,
 ) -> discord.Embed:
-    embed = discord.Embed(
+    embed = nexus_embed(
         title=title,
         description=description,
         color=color,
@@ -1064,7 +1086,7 @@ def build_embed(
     if image:
         embed.set_image(url=image)
     embed.set_footer(text=footer or BOT_FOOTER_TEXT, icon_url=footer_icon)
-    return embed
+    return style_embed(embed, bot)
 
 
 def format_uptime(seconds: float) -> str:
@@ -1284,7 +1306,7 @@ class AppealView(discord.ui.View):
     
     def _create_appeal_embed(self, user: discord.User, guild: discord.Guild) -> discord.Embed:
         """Crea el embed de apelación."""
-        embed = discord.Embed(
+        embed = nexus_embed(
             title="📩 Apelación de Sanción",
             description=f"El usuario **{user}** está apelando su sanción.",
             color=COLOR_AMBER,
@@ -1355,7 +1377,7 @@ class AppealView(discord.ui.View):
                     user = await bot.fetch_user(user_id)
                     
                     # Crear embed de respuesta
-                    embed_respuesta = discord.Embed(
+                    embed_respuesta = nexus_embed(
                         title="📨 Respuesta del Staff",
                         description=respuesta,
                         color=COLOR_OK,
@@ -1601,8 +1623,8 @@ HELP_CATEGORIES = {
             ("/avatar", "Muestra el avatar de un usuario (con botones para descargarlo)."),
             ("/user-info", "Muestra información de un usuario."),
             ("/roleinfo", "Muestra información detallada de un rol."),
-            ("/botinfo", "Muestra el estado técnico del bot."),
-            ("/ayuda-error", "Te ayuda a diagnosticar un mensaje de error."),
+            ("/nexus botinfo", "Muestra el estado técnico del bot."),
+            ("/nexus ayuda-error", "Te ayuda a diagnosticar un mensaje de error."),
         ],
     },
     "admin": {
@@ -1650,7 +1672,7 @@ HELP_CATEGORIES = {
         "label": "🎵 Música",
         "description": "Reproduce música en canales de voz.",
         "commands": [
-            ("/play", "Reproduce una canción por nombre o URL (YouTube/Spotify/SoundCloud)."),
+            ("/play", "Reproduce una canción por nombre o URL (YouTube/SoundCloud)."),
             ("/panel-play", "🎛️ Panel de música con botones (play/pausa, skip, stop, loop)."),
             ("/skip", "Salta a la siguiente canción de la cola."),
             ("/pause", "Pausa la reproducción actual."),
@@ -1685,7 +1707,7 @@ class HelpSelect(discord.ui.Select):
             return
         key = self.values[0]
         data = HELP_CATEGORIES[key]
-        fields = [(name, desc, False) for name, desc in data["commands"]]
+        fields = [(f"✦ {name}", f"> {desc}", False) for name, desc in data["commands"]]
         embed = build_embed(
             title=f"📖 Ayuda · {data['label']}",
             description=data["description"],
@@ -1693,6 +1715,8 @@ class HelpSelect(discord.ui.Select):
             fields=fields,
             footer="Nexus System · Usa el menú para ver otra categoría",
         )
+        if interaction.message.embeds and interaction.message.embeds[0].image.url:
+            embed.set_image(url=interaction.message.embeds[0].image.url)
         await interaction.response.edit_message(embed=embed, view=self.view)
 
 
@@ -1745,7 +1769,10 @@ YTDL_FORMAT_OPTIONS = {
     # yt-dlp elige el mejor audio que haya, sea cual sea el contenedor.
     "format": "bestaudio/best",
     "noplaylist": True,
-    "nocheckcertificate": True,
+    "nocheckcertificate": False,
+    "socket_timeout": 12,
+    "retries": 1,
+    "extractor_retries": 1,
     "ignoreerrors": False,
     "quiet": True,
     "no_warnings": True,
@@ -1775,7 +1802,7 @@ YTDL_FORMAT_OPTIONS = {
 if COOKIES_FILE:
     print(f"✅ Usando cookies de YouTube desde: {COOKIES_FILE}")
 else:
-    print("⚠️  No se encontró cookies.txt para YouTube. Si /play falla con 'Sign in to confirm you're not a bot', subí un cookies.txt (ver YTDLP_COOKIES_FILE) — es la única solución 100% confiable ante ese error.")
+    print("⚠️  No se encontró cookies.txt para YouTube. Si /play falla con 'Sign in to confirm you're not a bot', subí un cookies.txt (ver YTDLP_COOKIES_FILE) — puede ayudar, pero no garantiza el acceso.")
 
 # ✅ Diagnóstico del JS runtime (deno). Si no está instalado, YouTube va a
 # seguir tirando "Requested format is not available" con links y búsquedas.
@@ -1806,8 +1833,29 @@ YTDL_FORMAT_OPTIONS_FAST = {
     "extractor_args": {"youtube": {"player_client": ["tv"]}},
 }
 
-_ytdl_fast = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS_FAST)
-_ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
+_extract_slots = asyncio.Semaphore(3)
+_extract_pending = {}
+
+def _extract_once(options, term):
+    with yt_dlp.YoutubeDL(options) as client:
+        return client.extract_info(term, download=False)
+
+async def _extract_shared(term, key):
+    async with _extract_slots:
+        error = None
+        for options in (YTDL_FORMAT_OPTIONS_FAST, YTDL_FORMAT_OPTIONS):
+            try:
+                data = await asyncio.to_thread(_extract_once, options, term)
+                if data and 'entries' in data:
+                    data = next((item for item in data['entries'] if item), None)
+                if data and data.get('url'):
+                    _search_cache_set(key, data)
+                    return data, None
+                error = 'No se encontró un audio reproducible.'
+            except Exception as exc:
+                error = str(exc)
+        return None, error
+
 
 # ⚡ CACHE DE BÚSQUEDAS: si dos personas piden la misma canción (o la misma
 # persona la vuelve a pedir) dentro de los próximos 10 minutos, respondemos
@@ -1837,7 +1885,14 @@ def _search_cache_set(key: str, data: dict) -> None:
         _search_cache.pop(oldest_key, None)
     _search_cache[key] = (data, time.time())
 
-FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
+FFMPEG_EXECUTABLE = shutil.which("ffmpeg")
+if not FFMPEG_EXECUTABLE:
+    try:
+        import imageio_ffmpeg
+        FFMPEG_EXECUTABLE = imageio_ffmpeg.get_ffmpeg_exe()
+    except (ImportError, RuntimeError, OSError):
+        FFMPEG_EXECUTABLE = None
+FFMPEG_AVAILABLE = bool(FFMPEG_EXECUTABLE)
 if not FFMPEG_AVAILABLE:
     print("⚠️  FFmpeg no está instalado o no está en el PATH. La música NO va a poder reproducirse hasta que instales FFmpeg en el servidor/host.")
 
@@ -1856,13 +1911,16 @@ async def ytdl_extract(query: str) -> tuple[dict | None, str | None]:
     Devuelve (datos, error). Si hay un error, datos es None y error trae el motivo
     en texto plano para poder mostrárselo al usuario en Discord.
     """
-    loop = asyncio.get_event_loop()
-    
+    query = query.strip()
+    if not query or len(query) > 500: return None, "Introduce una búsqueda de 1 a 500 caracteres."
     # Limpiar la URL de parámetros de lista
     if URL_REGEX.match(query):
         # Remover parámetros de lista
         import urllib.parse
         parsed = urllib.parse.urlparse(query)
+        host = (parsed.hostname or '').lower()
+        if host not in {'youtu.be', 'youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'soundcloud.com', 'www.soundcloud.com', 'on.soundcloud.com'} or parsed.username or parsed.password:
+            return None, 'Usa un nombre de canción o una URL de YouTube/SoundCloud.'
         query_params = urllib.parse.parse_qs(parsed.query)
         # Eliminar el parámetro 'list' si existe
         if 'list' in query_params:
@@ -1878,38 +1936,20 @@ async def ytdl_extract(query: str) -> tuple[dict | None, str | None]:
     search_term = query if URL_REGEX.match(query) else f"ytsearch1:{query}"
 
     # ⚡ Si ya resolvimos esta misma búsqueda hace poco, la devolvemos directo.
-    cache_key = search_term.strip().lower()
+    cache_key = search_term.strip() if URL_REGEX.match(search_term) else search_term.strip().casefold()
     cached = _search_cache_get(cache_key)
     if cached is not None:
         return cached, None
 
-    # ⚡ Intento rápido (1 solo cliente). Si falla por lo que sea, reintentamos
-    # con los 4 clientes completos como red de seguridad — más lento, pero es
-    # exactamente el mismo comportamiento robusto que había antes.
-    fast_partial = functools.partial(_ytdl_fast.extract_info, search_term, download=False)
+    task = _extract_pending.get(cache_key)
+    if task is None:
+        task = asyncio.create_task(_extract_shared(search_term, cache_key))
+        _extract_pending[cache_key] = task
+        task.add_done_callback(lambda done: _extract_pending.pop(cache_key, None))
     try:
-        data = await loop.run_in_executor(None, fast_partial)
-    except Exception as e_fast:
-        print(f"⚡ Intento rápido de yt-dlp falló para '{query}' ({e_fast}); reintentando con todos los clientes...")
-        full_partial = functools.partial(_ytdl.extract_info, search_term, download=False)
-        try:
-            data = await loop.run_in_executor(None, full_partial)
-        except Exception as e:
-            print(f"Error de yt-dlp al buscar '{query}': {e}")
-            return None, str(e)
-
-    if data is None:
-        return None, "yt-dlp no devolvió resultados."
-
-    # Si es una lista de reproducción, tomar el primer elemento
-    if "entries" in data:
-        entries = [e for e in data["entries"] if e]
-        if not entries:
-            return None, "No se encontraron resultados válidos."
-        data = entries[0]
-
-    _search_cache_set(cache_key, data)
-    return data, None
+        return await asyncio.wait_for(asyncio.shield(task), timeout=55)
+    except asyncio.TimeoutError:
+        return None, 'La búsqueda está tardando demasiado. Intenta de nuevo en unos segundos.'
 
 
 def format_duration(seconds) -> str:
@@ -1928,21 +1968,23 @@ def create_progress_bar(current: float, total: float, length: int = 15) -> str:
         return "🔴 `EN VIVO`"
     filled = int((current / total) * length)
     filled = max(0, min(length, filled))
-    return "▬" * filled + "🔘" + "▬" * (length - filled)
+    return "━" * filled + "●" + "─" * (length - filled)
 
 
 def format_ytdlp_error(error: str | None) -> str:
     """Traduce errores comunes de yt-dlp a un mensaje entendible en español."""
     if not error:
         return "Sin detalles"
+    if "tardando demasiado" in error or "Introduce una búsqueda" in error or "Usa un nombre de canción" in error:
+        return error
     if "Sign in to confirm" in error or "not a bot" in error:
         return (
             "YouTube le está pidiendo al bot que confirme que 'no es un bot'. "
-            "Esto pasa cada vez más seguido y la única solución confiable es subir un archivo "
+            "Esto pasa cada vez más seguido y una posible solución es configurar un archivo "
             "`cookies.txt` (exportado de una cuenta de YouTube logueada) al servidor y configurar "
-            "la variable de entorno `YTDLP_COOKIES_FILE` con su ruta. Sin eso, YouTube seguirá bloqueando la descarga."
+            "la variable de entorno `YTDLP_COOKIES_FILE` con su ruta. No garantiza el acceso; YouTube puede aplicar otras restricciones."
         )
-    return error[:500]
+    return "No fue posible obtener el audio del proveedor. Comprueba el enlace y vuelve a intentarlo."
 
 
 LOOP_MODE_TEXTO = {"off": "Desactivado", "song": "🔂 Canción", "queue": "🔁 Cola"}
@@ -1959,31 +2001,23 @@ def build_now_playing_embed(state: "GuildMusicState") -> discord.Embed:
             color=COLOR_AMBER,
         )
 
-    if song.duration:
-        elapsed = 0.0
-        if state.play_started_at and not state.is_paused:
-            elapsed = min(time.time() - state.play_started_at, song.duration)
-        progreso = create_progress_bar(elapsed, song.duration)
-    else:
-        progreso = "🔴 `EN VIVO`"
-
-    estado = "⏸️ Pausado" if state.is_paused else "▶️ Reproduciendo"
-
+    elapsed = state.elapsed()
+    progreso = create_progress_bar(elapsed, song.duration)
+    timing = f'`{format_duration(elapsed) if elapsed >= 1 else "0:00"}` {progreso} `{format_duration(song.duration)}`' if song.duration else progreso
+    estado = '⏸  EN PAUSA' if state.is_paused else '▶  REPRODUCIENDO'
+    title = discord.utils.escape_markdown(str(song.title))[:180]
+    icon = animated(bot, 'olhos70', '♫')
     embed = build_embed(
-        title="🎶 Panel de música",
-        description=f"**[{song.title}]({song.webpage_url})**\n{progreso}",
-        color=COLOR_AMBER if state.is_paused else COLOR_OK,
-        image=song.thumbnail,
-        fields=[
-            ("Estado", estado, True),
-            ("⏱️ Duración", format_duration(song.duration), True),
-            ("🔊 Volumen", f"{int(state.volume * 100)}%", True),
-            ("🔁 Loop", LOOP_MODE_TEXTO.get(state.loop_mode, "Desactivado"), True),
-            ("🙋 Pedido por", getattr(song.requester, "mention", str(song.requester)), True),
-            ("👤 Canal/Artista", song.uploader, True),
-            ("📋 En cola", str(len(state.queue)), True),
-        ],
-        footer="Nexus Music",
+        title=f'{icon}  Nexus Music · Player',
+        description=f'## [{title}]({song.webpage_url})\n> **{estado}** · {discord.utils.escape_markdown(str(song.uploader))[:120]}\n\n{timing}',
+        color=COLOR_AMBER if state.is_paused else COLOR_MAIN,
+        thumbnail=song.thumbnail,
+        fields=[('🔊 Volumen', f'**{int(state.volume * 100)}%**', True),
+                ('🔁 Repetición', LOOP_MODE_TEXTO.get(state.loop_mode, 'Desactivado'), True),
+                ('📋 En cola', f'**{len(state.queue)}**', True),
+                ('Solicitado por', getattr(song.requester, 'mention', str(song.requester)), True),
+                ('A continuación', discord.utils.escape_markdown(str(state.queue[0].title))[:160] if state.queue else 'Cola vacía', False)],
+        footer='NEXUS MUSIC  •  Actualiza el progreso con ↻',
     )
     return embed
 
@@ -1996,7 +2030,7 @@ class MusicPanelView(discord.ui.View):
     música igual, así que no hace falta más complejidad acá."""
 
     def __init__(self, guild_id: int):
-        super().__init__(timeout=None)
+        super().__init__(timeout=1800)
         self.guild_id = guild_id
         self._sync_buttons()
 
@@ -2045,13 +2079,14 @@ class MusicPanelView(discord.ui.View):
                 embed=build_embed(title="❌ No hay nada reproduciéndose", color=COLOR_WARN), ephemeral=True
             )
         if state.is_paused:
-            state.voice_client.resume()
-            state.is_paused = False
+            state.resume_audio()
         else:
-            state.voice_client.pause()
-            state.is_paused = True
+            state.pause_audio()
         self._sync_buttons()
-        await interaction.response.edit_message(embed=build_now_playing_embed(state), view=self)
+        e = build_now_playing_embed(state)
+        if interaction.message.embeds and interaction.message.embeds[0].image.url:
+            e.set_image(url=interaction.message.embeds[0].image.url)
+        await interaction.response.edit_message(embed=e, view=self)
 
     @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary, row=0)
     async def skip_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2076,7 +2111,7 @@ class MusicPanelView(discord.ui.View):
             return await interaction.response.send_message(
                 embed=build_embed(title="❌ No hay música reproduciéndose", color=COLOR_WARN), ephemeral=True
             )
-        if state.voice_client.is_playing():
+        if state.is_playing():
             state.voice_client.stop()
         state.queue.clear()
         state.current = None
@@ -2112,7 +2147,10 @@ class MusicPanelView(discord.ui.View):
         orden = ["off", "song", "queue"]
         state.loop_mode = orden[(orden.index(state.loop_mode) + 1) % len(orden)]
         self._sync_buttons()
-        await interaction.response.edit_message(embed=build_now_playing_embed(state), view=self)
+        e = build_now_playing_embed(state)
+        if interaction.message.embeds and interaction.message.embeds[0].image.url:
+            e.set_image(url=interaction.message.embeds[0].image.url)
+        await interaction.response.edit_message(embed=e, view=self)
 
     @discord.ui.button(label="Vol -", emoji="🔉", style=discord.ButtonStyle.secondary, row=1)
     async def vol_down_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2126,7 +2164,10 @@ class MusicPanelView(discord.ui.View):
         state.volume = max(0.0, round(state.volume - 0.1, 2))
         if state.voice_client.source:
             state.voice_client.source.volume = state.volume
-        await interaction.response.edit_message(embed=build_now_playing_embed(state), view=self)
+        e = build_now_playing_embed(state)
+        if interaction.message.embeds and interaction.message.embeds[0].image.url:
+            e.set_image(url=interaction.message.embeds[0].image.url)
+        await interaction.response.edit_message(embed=e, view=self)
 
     @discord.ui.button(label="Vol +", emoji="🔊", style=discord.ButtonStyle.secondary, row=1)
     async def vol_up_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2140,7 +2181,19 @@ class MusicPanelView(discord.ui.View):
         state.volume = min(1.0, round(state.volume + 0.1, 2))
         if state.voice_client.source:
             state.voice_client.source.volume = state.volume
-        await interaction.response.edit_message(embed=build_now_playing_embed(state), view=self)
+        e = build_now_playing_embed(state)
+        if interaction.message.embeds and interaction.message.embeds[0].image.url:
+            e.set_image(url=interaction.message.embeds[0].image.url)
+        await interaction.response.edit_message(embed=e, view=self)
+
+    @discord.ui.button(label="Actualizar", emoji="🔄", row=1)
+    async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._misma_voz(interaction): return
+        self._sync_buttons()
+        e = build_now_playing_embed(get_music_state(self.guild_id))
+        if interaction.message.embeds and interaction.message.embeds[0].image.url:
+            e.set_image(url=interaction.message.embeds[0].image.url)
+        await interaction.response.edit_message(embed=e, view=self)
 
 
 class Song:
@@ -2177,7 +2230,10 @@ class GuildMusicState:
         self.play_started_at: float | None = None
         self.force_skip_loop: bool = False
         self.lock = asyncio.Lock()
+        self.voice_lock = asyncio.Lock()
         self.is_paused: bool = False
+        self.paused_at: float | None = None
+        self.idle_since: float | None = None
         # 📌 Si está en True, el bot NO se desconecta solo por inactividad
         # (ver disconnect_if_empty). Se activa con /quedate y se desactiva
         # con /leavebot o al desconectarse manualmente.
@@ -2187,6 +2243,24 @@ class GuildMusicState:
         # con el mismo nombre que un método de la clase lo tapa (shadowing):
         # "state.is_playing" deja de ser el método y pasa a ser ese bool,
         # así que "state.is_playing()" explota con 'bool' object is not callable.
+
+    def elapsed(self):
+        if self.play_started_at is None: return 0.0
+        now = self.paused_at if self.paused_at is not None else time.monotonic()
+        elapsed = max(0, now - self.play_started_at)
+        return min(elapsed, self.current.duration) if self.current and self.current.duration else elapsed
+
+    def pause_audio(self):
+        self.voice_client.pause()
+        self.paused_at = time.monotonic()
+        self.is_paused = True
+
+    def resume_audio(self):
+        self.voice_client.resume()
+        if self.paused_at is not None and self.play_started_at is not None:
+            self.play_started_at += time.monotonic() - self.paused_at
+        self.paused_at = None
+        self.is_paused = False
 
     def is_playing(self) -> bool:
         return bool(self.voice_client and (self.voice_client.is_playing() or self.voice_client.is_paused()))
@@ -2217,16 +2291,20 @@ async def resolve_and_queue(query: str, guild_id: int, requester: discord.abc.Us
 
 
 async def start_playback(guild_id: int) -> None:
-    state = get_music_state(guild_id)
+    state = music_states.get(guild_id)
+    if state is None: return
     async with state.lock:
-        if state.is_playing():
+        if music_states.get(guild_id) is not state or state.is_playing():
             return
         await _play_next_locked(guild_id)
 
 
-async def _advance(guild_id: int) -> None:
-    state = get_music_state(guild_id)
-    async with state.lock:
+async def _advance(guild_id: int, expected_state, expected_song, error=None) -> None:
+    if music_states.get(guild_id) is not expected_state: return
+    async with expected_state.lock:
+        if music_states.get(guild_id) is not expected_state or expected_state.current is not expected_song: return
+        if expected_state.is_playing(): return
+        if error: expected_state.current = None
         await _play_next_locked(guild_id)
 
 
@@ -2238,11 +2316,14 @@ async def _play_next_locked(guild_id: int) -> None:
         next_song = state.current
     elif state.queue:
         next_song = state.queue.pop(0)
-        if state.loop_mode == "queue" and state.current:
+        if state.loop_mode == "queue" and state.current and not state.force_skip_loop:
             state.queue.append(state.current)
+    elif state.loop_mode == "queue" and state.current and not state.force_skip_loop:
+        next_song = state.current
     else:
         state.current = None
         state.play_started_at = None
+        state.paused_at = None
         state.force_skip_loop = False
         state.is_paused = False   # ✅ ACTUALIZAR
         return
@@ -2251,6 +2332,7 @@ async def _play_next_locked(guild_id: int) -> None:
     state.current = next_song
 
     if not state.voice_client or not state.voice_client.is_connected():
+        state.current = None
         return
 
     # ⚡ Si la URL de streaming ya resuelta sigue fresca, la reusamos directo
@@ -2275,43 +2357,49 @@ async def _play_next_locked(guild_id: int) -> None:
                     ))
                 except Exception:
                     pass
+            state.current = None
             await _play_next_locked(guild_id)
             return
 
+        if music_states.get(guild_id) is not state or state.current is not next_song or not state.voice_client or not state.voice_client.is_connected(): return
         stream_url = data.get("url")
         next_song.stream_url = stream_url
         next_song.stream_url_fetched_at = time.time()
 
     try:
-        source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
+        source = discord.FFmpegPCMAudio(stream_url, executable=FFMPEG_EXECUTABLE, **FFMPEG_OPTIONS)
         source = discord.PCMVolumeTransformer(source, volume=state.volume)
     except Exception as e:
         print(f"Error creando la fuente de audio: {e}")
         # La URL cacheada puede haber fallado (p.ej. expiró antes de tiempo);
         # forzamos una re-resolución en el próximo intento.
         next_song.stream_url = None
+        state.current = None
         await _play_next_locked(guild_id)
         return
 
-    def _after_playing(error: Exception | None) -> None:
-        if error:
-            print(f"Error de reproducción: {error}")
-        fut = asyncio.run_coroutine_threadsafe(_advance(guild_id), bot.loop)
-        try:
-            fut.result()
-        except Exception as e:
-            print(f"Error avanzando la cola de música: {e}")
-
-    state.voice_client.play(source, after=_after_playing)
-    state.play_started_at = time.time()
+    event_loop = asyncio.get_running_loop()
+    def _after_playing(error):
+        if error: print(f'Error de reproducción: {error}')
+        if not event_loop.is_closed():
+            asyncio.run_coroutine_threadsafe(_advance(guild_id, state, next_song, error), event_loop)
+    try:
+        state.voice_client.play(source, after=_after_playing)
+    except Exception as exc:
+        source.cleanup()
+        print(f'Error iniciando audio: {exc}')
+        state.current = None
+        await _play_next_locked(guild_id)
+        return
+    state.play_started_at = time.monotonic()
+    state.paused_at = None
+    state.idle_since = None
     state.is_paused = False  # ✅ ACTUALIZAR
 
     if state.text_channel:
         try:
-            await state.text_channel.send(
-                embed=build_now_playing_embed(state),
-                view=MusicPanelView(guild_id),
-            )
+            e = build_now_playing_embed(state)
+            await state.text_channel.send(embed=e, view=MusicPanelView(guild_id), **banner(e, 'music'))
         except Exception:
             pass
 
@@ -2333,28 +2421,32 @@ async def ensure_voice(interaction: discord.Interaction) -> discord.VoiceClient 
     channel = interaction.user.voice.channel
     state = get_music_state(interaction.guild_id)
 
-    if interaction.guild.voice_client is None:
-        try:
-            state.voice_client = await channel.connect()
-        except Exception as e:
-            embed = build_embed(
-                title="❌ No pude conectarme al canal de voz",
-                description=f"Error: {e}",
-                color=COLOR_WARN,
-            )
-            if interaction.response.is_done():
-                await interaction.followup.send(embed=embed, ephemeral=True)
-            else:
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-            return None
-    elif interaction.guild.voice_client.channel != channel:
-        await interaction.guild.voice_client.move_to(channel)
-        state.voice_client = interaction.guild.voice_client
-    else:
-        state.voice_client = interaction.guild.voice_client
+    async with state.voice_lock:
+        if interaction.guild.voice_client is None:
+            try:
+                state.voice_client = await channel.connect(timeout=20)
+            except Exception as e:
+                embed = build_embed(
+                    title="❌ No pude conectarme al canal de voz",
+                    description=f"Error: {e}",
+                    color=COLOR_WARN,
+                )
+                if interaction.response.is_done():
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                else:
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
+                return None
+        elif interaction.guild.voice_client.channel != channel:
+            if state.is_playing() or state.queue:
+                await interaction.followup.send(embed=build_embed(title="🔒 Sesión musical activa", description="Únete al canal donde está el bot."), ephemeral=True)
+                return None
+            await interaction.guild.voice_client.move_to(channel)
+            state.voice_client = interaction.guild.voice_client
+        else:
+            state.voice_client = interaction.guild.voice_client
 
-    state.text_channel = interaction.channel
-    return state.voice_client
+        state.text_channel = interaction.channel
+        return state.voice_client
 
 
 def build_queue_pages(state: GuildMusicState, per_page: int = 10) -> list[discord.Embed]:
@@ -2407,6 +2499,9 @@ def build_queue_pages(state: GuildMusicState, per_page: int = 10) -> list[discor
 @bot.event
 async def on_ready():
     """Evento cuando el bot está listo."""
+    if getattr(bot, '_nexus_ready_initialized', False):
+        return
+    bot._nexus_ready_initialized = True
     try:
         if GUILD_ID:
             guild_obj = discord.Object(id=int(GUILD_ID))
@@ -2419,12 +2514,9 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Error sincronizando comandos: {e}")
     
-    # 🔥 FUERZA LA SINCRONIZACIÓN COMPLETA
-    try:
-        await bot.tree.sync()
-        print("✅ Comandos sincronizados forzadamente")
-    except Exception as e:
-        print(f"❌ Error en sincronización forzada: {e}")
+    if GUILD_ID:
+        try: await bot.tree.sync()
+        except Exception as exc: print(f'Error sincronizando globalmente: {exc}')
 
     # Registrar vistas persistentes (botones que sobreviven a un reinicio)
     try:
@@ -2471,7 +2563,7 @@ async def on_ready():
         await bot.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name=f"Nexus Pro · /ayuda | {len(bot.guilds)} servidores"
+                name=f"Nexus System · /ayuda | {len(bot.guilds)} servidores"
             )
         )
     except Exception as e:
@@ -2499,40 +2591,50 @@ async def on_ready():
 async def disconnect_if_empty():
     """Desconecta el bot si está solo en el canal de voz por más de 5 minutos."""
     while True:
-        await asyncio.sleep(60)  # Revisar cada minuto
+        await asyncio.sleep(30)
         for guild_id, state in list(music_states.items()):
-            if state.stay_connected:
-                # 📌 El servidor pidió con /quedate que el bot no se vaya solo.
+            vc = state.voice_client
+            if state.stay_connected or not vc or not vc.is_connected() or state.is_playing() or state.queue or state.current:
+                state.idle_since = None
                 continue
-            if state.voice_client and state.voice_client.is_connected():
-                # Si no está reproduciendo y no hay cola
-                if not state.is_playing() and len(state.queue) == 0:
-                    # Esperar 5 minutos antes de desconectar
-                    await asyncio.sleep(300)
-                    # Volver a verificar después de la espera (por si en el medio se activó /quedate)
-                    if not state.is_playing() and len(state.queue) == 0 and not state.stay_connected:
-                        try:
-                            await state.voice_client.disconnect()
-                            state.voice_client = None
-                            print(f"🔇 Desconectado por inactividad en guild {guild_id}")
-                            if guild_id in music_states:
-                                del music_states[guild_id]
-                        except Exception as e:
-                            print(f"❌ Error desconectando por inactividad: {e}")
+            if state.idle_since is None: state.idle_since = time.monotonic()
+            if time.monotonic() - state.idle_since < 300: continue
+            try:
+                async with state.lock:
+                    if state.is_playing() or state.queue or state.current or state.stay_connected: continue
+                    await vc.disconnect()
+                    if music_states.get(guild_id) is state: music_states.pop(guild_id, None)
+            except Exception as exc: print(f'Error desconectando por inactividad: {exc}')
 
 # ──────────────────────────────────────────────────────────────
 #  COMANDOS DE MÚSICA COMPLETOS
 # ──────────────────────────────────────────────────────────────
 
+_music_log_lock = asyncio.Lock()
+_music_log_tasks = set()
+
+def schedule_music_log(fn, *args):
+    async def run():
+        async with _music_log_lock:
+            try: await asyncio.to_thread(fn, *args)
+            except Exception as exc: print(f'Log musical: {exc}')
+    task = asyncio.create_task(run())
+    _music_log_tasks.add(task)
+    task.add_done_callback(_music_log_tasks.discard)
+
+
 @bot.tree.command(name="play", description="🎵 Reproduce una canción en el canal de voz.")
-@app_commands.describe(query="Nombre de la canción o URL (YouTube, Spotify, SoundCloud)")
+@app_commands.guild_only()
+@app_commands.describe(query="Nombre de la canción o URL (YouTube, SoundCloud)")
 @app_commands.checks.cooldown(1, 3.0)
 async def play(interaction: discord.Interaction, query: str):
     """Reproduce una canción en el canal de voz."""
-    track_command(interaction.guild_id, "play")
     
     # ✅ RESPONDER INMEDIATAMENTE para evitar timeout
     await interaction.response.defer(ephemeral=True, thinking=True)
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return await interaction.followup.send('Usa /play dentro de un servidor.', ephemeral=True)
+    schedule_music_log(track_command, interaction.guild_id, 'play')
 
     if not FFMPEG_AVAILABLE:
         embed = build_embed(
@@ -2579,6 +2681,8 @@ async def play(interaction: discord.Interaction, query: str):
     state.text_channel = interaction.channel
 
     data, error = await search_task
+    if music_states.get(interaction.guild_id) is not state or not state.voice_client or not state.voice_client.is_connected():
+        return await interaction.followup.send('La sesión musical se cerró durante la búsqueda.', ephemeral=True)
     if data is None:
         embed = build_embed(
             title="❌ Canción no encontrada",
@@ -2592,47 +2696,37 @@ async def play(interaction: discord.Interaction, query: str):
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
 
+    if len(state.queue) >= 100:
+        return await interaction.followup.send("La cola está llena (100 canciones).", ephemeral=True)
     song = Song(data, interaction.user)
     state.queue.append(song)
     
-    # Registrar en logs
-    record_log(
-        interaction.guild_id,
-        "musica",
-        f"{interaction.user} añadió a la cola: {song.title}",
-        str(interaction.user)
-    )
-    
-    # Responder con el embed
-    embed = build_embed(
-        title="✅ Canción añadida a la cola",
-        color=COLOR_OK,
-        thumbnail=song.thumbnail,
-        fields=[
-            ("📝 Canción", f"[{song.title}]({song.webpage_url})", False),
-            ("👤 Subido por", song.uploader, True),
-            ("⏱️ Duración", format_duration(song.duration), True),
-            ("📊 Posición en cola", f"#{len(state.queue)}", True),
-        ],
-        footer=f"Pedido por {interaction.user.display_name}",
-    )
-    await interaction.followup.send(embed=embed)
-    
-    # Si no está reproduciendo, empezar
+    schedule_music_log(record_log, interaction.guild_id, 'musica', f'{interaction.user} añadió a la cola: {song.title}', str(interaction.user))
+    icon = animated(bot, 'checkmark', '✅')
+    embed = build_embed(title=f'{icon}  Nexus Music · Solicitud recibida',
+        description=f'## [{discord.utils.escape_markdown(str(song.title))[:180]}]({song.webpage_url})\n> Audio localizado y añadido a la sesión.',
+        thumbnail=song.thumbnail, color=COLOR_OK,
+        fields=[('Artista / canal', str(song.uploader)[:150], True), ('Duración', format_duration(song.duration), True), ('Posición', f'#{len(state.queue)}', True)],
+        footer=f'Solicitado por {interaction.user.display_name}')
+    # Arrancar sin esperar el envío HTTP de la confirmación.
     if not state.is_playing():
-        await start_playback(interaction.guild_id)
+        asyncio.create_task(start_playback(interaction.guild_id))
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="skip", description="⏭️ Salta la canción actual.")
+@app_commands.guild_only()
 @app_commands.checks.cooldown(1, 3.0)
 async def skip(interaction: discord.Interaction):
     """Salta la canción actual."""
-    track_command(interaction.guild_id, "skip")
+    schedule_music_log(track_command, interaction.guild_id, "skip")
     
     # ✅ Defer inmediato
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     state = get_music_state(interaction.guild_id)
+    if state.voice_client and (not interaction.user.voice or interaction.user.voice.channel != state.voice_client.channel):
+        return await interaction.followup.send('Únete al mismo canal de voz del bot.', ephemeral=True)
     
     if not state.is_playing() or not state.current:
         embed = build_embed(
@@ -2662,15 +2756,18 @@ async def skip(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="pause", description="⏸️ Pausa la canción actual.")
+@app_commands.guild_only()
 @app_commands.checks.cooldown(1, 3.0)
 async def pause(interaction: discord.Interaction):
     """Pausa la canción actual."""
-    track_command(interaction.guild_id, "pause")
+    schedule_music_log(track_command, interaction.guild_id, "pause")
     
     # ✅ DEFER INMEDIATO
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     state = get_music_state(interaction.guild_id)
+    if state.voice_client and (not interaction.user.voice or interaction.user.voice.channel != state.voice_client.channel):
+        return await interaction.followup.send('Únete al mismo canal de voz del bot.', ephemeral=True)
     
     if not state.is_playing() or not state.voice_client:
         embed = build_embed(
@@ -2688,8 +2785,7 @@ async def pause(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
     
-    state.voice_client.pause()
-    state.is_paused = True
+    state.pause_audio()
     
     embed = build_embed(
         title="⏸️ Canción pausada",
@@ -2700,15 +2796,18 @@ async def pause(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="resume", description="▶️ Reanuda la canción pausada.")
+@app_commands.guild_only()
 @app_commands.checks.cooldown(1, 3.0)
 async def resume(interaction: discord.Interaction):
     """Reanuda la canción pausada."""
-    track_command(interaction.guild_id, "resume")
+    schedule_music_log(track_command, interaction.guild_id, "resume")
     
     # ✅ DEFER INMEDIATO
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     state = get_music_state(interaction.guild_id)
+    if state.voice_client and (not interaction.user.voice or interaction.user.voice.channel != state.voice_client.channel):
+        return await interaction.followup.send('Únete al mismo canal de voz del bot.', ephemeral=True)
     
     if not state.is_playing() or not state.voice_client:
         embed = build_embed(
@@ -2726,8 +2825,7 @@ async def resume(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
     
-    state.voice_client.resume()
-    state.is_paused = False
+    state.resume_audio()
     
     embed = build_embed(
         title="▶️ Canción reanudada",
@@ -2738,15 +2836,18 @@ async def resume(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="stop", description="⏹️ Detiene la música y limpia la cola.")
+@app_commands.guild_only()
 @app_commands.checks.cooldown(1, 3.0)
 async def stop(interaction: discord.Interaction):
     """Detiene la música y limpia la cola."""
-    track_command(interaction.guild_id, "stop")
+    schedule_music_log(track_command, interaction.guild_id, "stop")
     
     # ✅ DEFER INMEDIATO
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     state = get_music_state(interaction.guild_id)
+    if state.voice_client and (not interaction.user.voice or interaction.user.voice.channel != state.voice_client.channel):
+        return await interaction.followup.send('Únete al mismo canal de voz del bot.', ephemeral=True)
     
     if not state.voice_client:
         embed = build_embed(
@@ -2757,7 +2858,7 @@ async def stop(interaction: discord.Interaction):
         return
     
     # Detener y limpiar
-    if state.voice_client.is_playing():
+    if state.is_playing():
         state.voice_client.stop()
     state.queue.clear()
     state.current = None
@@ -2784,10 +2885,11 @@ async def stop(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="queue", description="📋 Muestra la cola de canciones.")
+@app_commands.guild_only()
 @app_commands.checks.cooldown(1, 5.0)
 async def queue_cmd(interaction: discord.Interaction):
     """Muestra la cola de canciones."""
-    track_command(interaction.guild_id, "queue")
+    schedule_music_log(track_command, interaction.guild_id, "queue")
     
     # ✅ DEFER INMEDIATO (por si hay muchos elementos)
     await interaction.response.defer(ephemeral=True, thinking=True)
@@ -2803,10 +2905,11 @@ async def queue_cmd(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="nowplaying", description="🎵 Muestra la canción que se está reproduciendo.")
+@app_commands.guild_only()
 @app_commands.checks.cooldown(1, 3.0)
 async def nowplaying(interaction: discord.Interaction):
     """Muestra la canción actual."""
-    track_command(interaction.guild_id, "nowplaying")
+    schedule_music_log(track_command, interaction.guild_id, "nowplaying")
     
     # ✅ DEFER INMEDIATO
     await interaction.response.defer(ephemeral=True, thinking=True)
@@ -2826,27 +2929,29 @@ async def nowplaying(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="panel-play", description="🎶 Muestra el panel de música con botones (play/pausa, skip, stop, loop).")
+@app_commands.guild_only()
 @app_commands.checks.cooldown(1, 3.0)
 async def panel_play_cmd(interaction: discord.Interaction):
     """Publica el panel de control de música con botones."""
-    track_command(interaction.guild_id, "panel-play")
+    schedule_music_log(track_command, interaction.guild_id, "panel-play")
     await interaction.response.defer(thinking=True)
 
     state = get_music_state(interaction.guild_id)
     embed = build_now_playing_embed(state)
 
     if state.current:
-        await interaction.followup.send(embed=embed, view=MusicPanelView(interaction.guild_id))
+        await interaction.followup.send(embed=embed, view=MusicPanelView(interaction.guild_id), **banner(embed, "music"))
     else:
         await interaction.followup.send(embed=embed)
 
 
 @bot.tree.command(name="volume", description="🔊 Ajusta el volumen de la música.")
+@app_commands.guild_only()
 @app_commands.describe(volumen="Volumen (0-100)")
 @app_commands.checks.cooldown(1, 3.0)
 async def volume(interaction: discord.Interaction, volumen: int):
     """Ajusta el volumen de la música."""
-    track_command(interaction.guild_id, "volume")
+    schedule_music_log(track_command, interaction.guild_id, "volume")
     
     # ✅ DEFER INMEDIATO
     await interaction.response.defer(ephemeral=True, thinking=True)
@@ -2861,6 +2966,8 @@ async def volume(interaction: discord.Interaction, volumen: int):
         return
     
     state = get_music_state(interaction.guild_id)
+    if state.voice_client and (not interaction.user.voice or interaction.user.voice.channel != state.voice_client.channel):
+        return await interaction.followup.send('Únete al mismo canal de voz del bot.', ephemeral=True)
     
     if not state.voice_client:
         embed = build_embed(
@@ -2882,6 +2989,7 @@ async def volume(interaction: discord.Interaction, volumen: int):
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="loop", description="🔄 Activa el modo de repetición.")
+@app_commands.guild_only()
 @app_commands.describe(modo="Modo de repetición")
 @app_commands.choices(modo=[
     app_commands.Choice(name="Desactivado", value="off"),
@@ -2891,12 +2999,14 @@ async def volume(interaction: discord.Interaction, volumen: int):
 @app_commands.checks.cooldown(1, 3.0)
 async def loop(interaction: discord.Interaction, modo: app_commands.Choice[str]):
     """Activa el modo de repetición."""
-    track_command(interaction.guild_id, "loop")
+    schedule_music_log(track_command, interaction.guild_id, "loop")
     
     # ✅ DEFER INMEDIATO
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     state = get_music_state(interaction.guild_id)
+    if state.voice_client and (not interaction.user.voice or interaction.user.voice.channel != state.voice_client.channel):
+        return await interaction.followup.send('Únete al mismo canal de voz del bot.', ephemeral=True)
     state.loop_mode = modo.value
     
     textos = {
@@ -2912,15 +3022,18 @@ async def loop(interaction: discord.Interaction, modo: app_commands.Choice[str])
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="shuffle", description="🔀 Mezcla aleatoriamente la cola.")
+@app_commands.guild_only()
 @app_commands.checks.cooldown(1, 5.0)
 async def shuffle(interaction: discord.Interaction):
     """Mezcla aleatoriamente la cola."""
-    track_command(interaction.guild_id, "shuffle")
+    schedule_music_log(track_command, interaction.guild_id, "shuffle")
     
     # ✅ DEFER INMEDIATO
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     state = get_music_state(interaction.guild_id)
+    if state.voice_client and (not interaction.user.voice or interaction.user.voice.channel != state.voice_client.channel):
+        return await interaction.followup.send('Únete al mismo canal de voz del bot.', ephemeral=True)
     
     if len(state.queue) < 2:
         embed = build_embed(
@@ -2942,16 +3055,19 @@ async def shuffle(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="remove", description="🗑️ Elimina una canción de la cola.")
+@app_commands.guild_only()
 @app_commands.describe(posicion="Número de posición en la cola")
 @app_commands.checks.cooldown(1, 3.0)
 async def remove(interaction: discord.Interaction, posicion: int):
     """Elimina una canción de la cola."""
-    track_command(interaction.guild_id, "remove")
+    schedule_music_log(track_command, interaction.guild_id, "remove")
     
     # ✅ DEFER INMEDIATO
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     state = get_music_state(interaction.guild_id)
+    if state.voice_client and (not interaction.user.voice or interaction.user.voice.channel != state.voice_client.channel):
+        return await interaction.followup.send('Únete al mismo canal de voz del bot.', ephemeral=True)
     
     if posicion < 1 or posicion > len(state.queue):
         embed = build_embed(
@@ -2972,10 +3088,11 @@ async def remove(interaction: discord.Interaction, posicion: int):
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="quedate", description="📌 El bot se queda en el canal de voz sin desconectarse solo, hasta que uses /leavebot.")
+@app_commands.guild_only()
 @app_commands.checks.cooldown(1, 5.0)
 async def quedate_cmd(interaction: discord.Interaction):
     """Activa el modo 'quedate': el bot no se desconecta por inactividad."""
-    track_command(interaction.guild_id, "quedate")
+    schedule_music_log(track_command, interaction.guild_id, "quedate")
 
     # ✅ DEFER INMEDIATO
     await interaction.response.defer(ephemeral=True, thinking=True)
@@ -3008,15 +3125,18 @@ async def quedate_cmd(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="leavebot", description="👋 Saca al bot del canal de voz (cancela el modo /quedate).")
+@app_commands.guild_only()
 @app_commands.checks.cooldown(1, 5.0)
 async def leavebot_cmd(interaction: discord.Interaction):
     """Desconecta al bot del canal de voz y desactiva el modo /quedate."""
-    track_command(interaction.guild_id, "leavebot")
+    schedule_music_log(track_command, interaction.guild_id, "leavebot")
 
     # ✅ DEFER INMEDIATO
     await interaction.response.defer(ephemeral=True, thinking=True)
 
     state = get_music_state(interaction.guild_id)
+    if state.voice_client and (not interaction.user.voice or interaction.user.voice.channel != state.voice_client.channel):
+        return await interaction.followup.send("Únete al mismo canal de voz del bot.", ephemeral=True)
 
     if not state.voice_client:
         embed = build_embed(
@@ -3027,7 +3147,7 @@ async def leavebot_cmd(interaction: discord.Interaction):
         return
 
     # Detener y limpiar
-    if state.voice_client.is_playing():
+    if state.is_playing():
         state.voice_client.stop()
     state.queue.clear()
     state.current = None
@@ -3056,15 +3176,18 @@ async def leavebot_cmd(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="disconnect", description="🔌 Desconecta al bot del canal de voz.")
+@app_commands.guild_only()
 @app_commands.checks.cooldown(1, 5.0)
 async def disconnect(interaction: discord.Interaction):
     """Desconecta al bot del canal de voz."""
-    track_command(interaction.guild_id, "disconnect")
+    schedule_music_log(track_command, interaction.guild_id, "disconnect")
     
     # ✅ DEFER INMEDIATO
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     state = get_music_state(interaction.guild_id)
+    if state.voice_client and (not interaction.user.voice or interaction.user.voice.channel != state.voice_client.channel):
+        return await interaction.followup.send('Únete al mismo canal de voz del bot.', ephemeral=True)
     
     if not state.voice_client:
         embed = build_embed(
@@ -3075,7 +3198,7 @@ async def disconnect(interaction: discord.Interaction):
         return
     
     # Detener y limpiar
-    if state.voice_client.is_playing():
+    if state.is_playing():
         state.voice_client.stop()
     state.queue.clear()
     state.current = None
@@ -3437,7 +3560,7 @@ async def verificar_rol(interaction: discord.Interaction, usuario: discord.Membe
     
     roles_lista = ", ".join([f"`{r.name}`" for r in usuario.roles if r.name != "@everyone"])
     
-    embed = discord.Embed(
+    embed = nexus_embed(
         title="🔍 Verificación de roles",
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc)
@@ -3626,7 +3749,7 @@ async def mute(
     )
     
     try:
-        dm_embed = discord.Embed(
+        dm_embed = nexus_embed(
             title="🔇 Has sido muteado",
             description=f"Has sido muteado en **{interaction.guild.name}**.",
             color=COLOR_WARN,
@@ -3689,7 +3812,7 @@ async def unmute(interaction: discord.Interaction, usuario: discord.Member):
     )
     
     try:
-        dm_embed = discord.Embed(
+        dm_embed = nexus_embed(
             title="🔊 Has sido desmuteado",
             description=f"Has sido desmuteado en **{interaction.guild.name}**.",
             color=COLOR_OK,
@@ -3736,7 +3859,7 @@ async def kick(interaction: discord.Interaction, usuario: discord.Member, razon:
         return
     
     try:
-        dm_embed = discord.Embed(
+        dm_embed = nexus_embed(
             title="👋 Has sido expulsado",
             description=f"Has sido expulsado de **{interaction.guild.name}**.",
             color=COLOR_WARN,
@@ -3850,7 +3973,7 @@ async def ban(
         duration_text = f"{value} {unit_names[unit]}"
     
     try:
-        dm_embed = discord.Embed(
+        dm_embed = nexus_embed(
             title="🔨 Has sido baneado",
             description=f"Has sido baneado de **{interaction.guild.name}**.",
             color=COLOR_WARN,
@@ -4087,7 +4210,7 @@ async def multicuenta(
             if interaction.guild.get_member(u.id):
                 in_server.append(u)
         
-        embed = discord.Embed(
+        embed = nexus_embed(
             title="🔍 Análisis de Multicuenta",
             color=COLOR_MAIN,
             timestamp=datetime.now(timezone.utc)
@@ -4144,7 +4267,7 @@ async def multicuenta(
             if interaction.guild.get_member(u.id):
                 in_server.append(u)
         
-        embed = discord.Embed(
+        embed = nexus_embed(
             title="🔍 Análisis de IP",
             color=COLOR_MAIN,
             timestamp=datetime.now(timezone.utc)
@@ -4185,7 +4308,7 @@ async def multicuenta(
         
         shared_ips = {ip: count for ip, count in ip_counts.items() if count > 1}
         
-        embed = discord.Embed(
+        embed = nexus_embed(
             title="📊 Resumen Anti-Multicuenta",
             color=COLOR_PURPLE,
             timestamp=datetime.now(timezone.utc)
@@ -4404,6 +4527,7 @@ async def config_logs(
     canal: discord.TextChannel | None = None
 ):
     track_command(interaction.guild_id, "config-logs")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     cfg["log_channels"][tipo.value] = canal.id if canal else None
     update_guild_config(interaction.guild_id, cfg)
@@ -4417,7 +4541,7 @@ async def config_logs(
         ),
         color=COLOR_OK,
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="config-rol-enlace", description="[Admin] Agrega o quita roles autorizados para /enlace.")
@@ -4436,6 +4560,7 @@ async def config_rol_enlace(
     rol: discord.Role
 ):
     track_command(interaction.guild_id, "config-rol-enlace")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     roles = set(cfg.get("roles_enlace", []))
 
@@ -4445,7 +4570,7 @@ async def config_rol_enlace(
                 title="ℹ️ Este rol ya está autorizado",
                 color=COLOR_AMBER,
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
         roles.add(rol.id)
         titulo = "✅ Rol agregado"
@@ -4456,7 +4581,7 @@ async def config_rol_enlace(
                 title="ℹ️ Este rol no estaba autorizado",
                 color=COLOR_AMBER,
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
         roles.discard(rol.id)
         titulo = "✅ Rol quitado"
@@ -4466,7 +4591,7 @@ async def config_rol_enlace(
     update_guild_config(interaction.guild_id, cfg)
 
     embed = build_embed(title=titulo, description=descripcion, color=COLOR_OK)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -4497,6 +4622,7 @@ async def config_welcome(
     banner: str | None = None
 ):
     track_command(interaction.guild_id, "config-welcome")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
 
     if activado is not None:
@@ -4519,7 +4645,7 @@ async def config_welcome(
             ("Mensaje", cfg.get("welcome_message", ""), False),
         ],
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="config-despedida", description="[Admin] Configura el sistema de despedidas.")
@@ -4542,6 +4668,7 @@ async def config_despedida(
     banner: str | None = None
 ):
     track_command(interaction.guild_id, "config-despedida")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
 
     if activado is not None:
@@ -4564,7 +4691,7 @@ async def config_despedida(
             ("Mensaje", cfg.get("farewell_message", ""), False),
         ],
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="config-dm-bienvenida", description="[Admin] Configura el mensaje privado (DM) que reciben los nuevos miembros al unirse.")
@@ -4585,6 +4712,7 @@ async def config_dm_bienvenida(
     banner: str | None = None
 ):
     track_command(interaction.guild_id, "config-dm-bienvenida")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
 
     if activado is not None:
@@ -4605,13 +4733,14 @@ async def config_dm_bienvenida(
             ("Mensaje", (cfg.get("dm_welcome_message", "") or "")[:1024], False),
         ],
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="test-dm-bienvenida", description="[Admin] Te envía por privado una vista previa del DM de bienvenida.")
 @app_commands.checks.has_permissions(administrator=True)
 async def test_dm_bienvenida(interaction: discord.Interaction):
     track_command(interaction.guild_id, "test-dm-bienvenida")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     member = interaction.user
 
@@ -4632,17 +4761,18 @@ async def test_dm_bienvenida(interaction: discord.Interaction):
             description="Tenés los DMs cerrados para este servidor, así que no pude mandarte la vista previa.",
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=error_embed, ephemeral=True)
+        await interaction.followup.send(embed=error_embed, ephemeral=True)
         return
 
     confirm = build_embed(title="✅ Enviado", description="Revisá tus mensajes privados.", color=COLOR_OK)
-    await interaction.response.send_message(embed=confirm, ephemeral=True)
+    await interaction.followup.send(embed=confirm, ephemeral=True)
 
 
 @bot.tree.command(name="test-welcome", description="[Admin] Previsualiza el mensaje de bienvenida.")
 @app_commands.checks.has_permissions(administrator=True)
 async def test_welcome(interaction: discord.Interaction):
     track_command(interaction.guild_id, "test-welcome")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     member = interaction.user  # Member en contexto de servidor
 
@@ -4655,13 +4785,14 @@ async def test_welcome(interaction: discord.Interaction):
         image=cfg.get("welcome_banner"),
         footer=f"Miembro #{interaction.guild.member_count} · Vista previa",
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="test-despedida", description="[Admin] Previsualiza el mensaje de despedida.")
 @app_commands.checks.has_permissions(administrator=True)
 async def test_despedida(interaction: discord.Interaction):
     track_command(interaction.guild_id, "test-despedida")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     member = interaction.user
 
@@ -4674,13 +4805,14 @@ async def test_despedida(interaction: discord.Interaction):
         image=cfg.get("farewell_banner"),
         footer="Vista previa",
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="ver-config", description="[Admin] Muestra la configuración actual del bot.")
 @app_commands.checks.has_permissions(administrator=True)
 async def ver_config(interaction: discord.Interaction):
     track_command(interaction.guild_id, "ver-config")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     guild = interaction.guild
 
@@ -4718,7 +4850,7 @@ async def ver_config(interaction: discord.Interaction):
             ),
         ],
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -4779,7 +4911,7 @@ async def server_info(interaction: discord.Interaction):
     bots = sum(1 for m in guild.members if m.bot)
     humanos = guild.member_count - bots
 
-    embed = discord.Embed(
+    embed = nexus_embed(
         title=f"📊 Información de {guild.name}",
         color=COLOR_MAIN,
         timestamp=datetime.now(timezone.utc),
@@ -4866,7 +4998,7 @@ async def avatar(interaction: discord.Interaction, usuario: discord.Member | Non
     global_avatar = usuario.avatar or usuario.default_avatar
     server_avatar = usuario.guild_avatar if isinstance(usuario, discord.Member) else None
 
-    embed = discord.Embed(
+    embed = nexus_embed(
         title=f"🖼️ Avatar de {usuario.display_name}",
         color=usuario.color if getattr(usuario, "color", None) and usuario.color.value else COLOR_MAIN,
         timestamp=datetime.now(timezone.utc),
@@ -4888,7 +5020,7 @@ async def user_info(interaction: discord.Interaction, usuario: discord.Member | 
 
     roles = [r.mention for r in usuario.roles if r.name != "@everyone"]
 
-    embed = discord.Embed(
+    embed = nexus_embed(
         title=f"👤 Información de {usuario}",
         color=usuario.color if usuario.color.value else COLOR_MAIN,
         timestamp=datetime.now(timezone.utc),
@@ -4978,60 +5110,237 @@ async def precio_nexus_pro(interaction: discord.Interaction):
 
 
 # ──────────────────────────────────────────────────────────────
-#  COMANDO: /precio-nexus-pro-public  (versión pública)
+#  TIENDA NEXUS+ / NEXUS COINS
 # ──────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="precio-nexus-pro-public", description="[Público] Muestra los precios de Nexus Pro en el canal.")
-@app_commands.checks.cooldown(1, 30.0)
-async def precio_nexus_pro_public(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "precio-nexus-pro-public")
-    
-    USD_TO_COP = 4000
-    USD_TO_BRL = 5.50
-    USD_TO_ARS = 950
-    
-    precios = {
-        "5 días": 3.00,
-        "1 semana": 5.00,
-        "1 mes": 7.00,
-        "3 meses": 11.00,
-        "6 meses": 17.00,
-        "12 meses": 25.00,
-        "De por vida": 50.00,
-    }
-    
-    lines = []
-    for plan, usd in precios.items():
-        cop = usd * USD_TO_COP
-        brl = usd * USD_TO_BRL
-        ars = usd * USD_TO_ARS
-        lines.append(
-            f"**{plan}**\n"
-            f"└ 🇺🇸 ${usd:.2f} USD · 🇨🇴 ${cop:,.0f} COP · 🇧🇷 R${brl:.2f} BRL · 🇦🇷 ${ars:,.0f} ARS"
-        )
-    
-    tabla_precios = "\n\n".join(lines)
-    
+NEXUS_PLUS_URL = "https://nexusforgex.xyz/nexusplus"
+NEXUS_PLUS_PLANS = (
+    ("Semanal", "$1.99"),
+    ("Mensual", "$4.99"),
+    ("3 meses", "$12.99"),
+    ("6 meses", "$23.99"),
+    ("12 meses", "$39.99"),
+    ("3 años", "$99.99"),
+)
+NEXUS_COIN_PACKAGES = (
+    ("300", "$0.99", "Básico"),
+    ("1,000", "$2.99", "Medio"),
+    ("2,500", "$5.99", "Pro"),
+    ("5,000", "$9.99", "Avanzado"),
+    ("10,000", "$17.99", "Ultra"),
+    ("20,000", "$29.99", "Ballena"),
+)
+
+tienda_group = app_commands.Group(name="tienda", description="Planes Nexus+ y paquetes de Nexus Coins.")
+
+
+def _is_nexus_store_admin(interaction: discord.Interaction) -> bool:
+    return interaction.user.id in {Config.OWNER_ID, Config.ADMIN_USER_ID}
+
+
+def _set_firebase_nexus_plus(uid: str, enabled: bool, duration_days: int) -> int | None:
+    if firebase_db is None:
+        raise RuntimeError("Firebase Admin no está configurado en el servidor del bot.")
+
+    uid = uid.strip()
+    if not uid:
+        raise ValueError("El UID de Firebase no puede estar vacío.")
+
+    user_ref = firebase_db.collection("users").document(uid)
+    if not user_ref.get().exists:
+        raise LookupError("No existe un perfil web con ese UID de Firebase.")
+
+    expiration = int(time.time() * 1000) + duration_days * 24 * 60 * 60 * 1000 if enabled else 0
+    user_ref.set(
+        {
+            "nexusPlus": enabled,
+            "hasNexusPlus": enabled,
+            "nexusPlusExpiration": expiration,
+        },
+        merge=True,
+    )
+    return expiration if enabled else None
+
+
+def _grant_firebase_nexus_coins(uid: str, amount: int) -> None:
+    if firebase_db is None:
+        raise RuntimeError("Firebase Admin no está configurado en el servidor del bot.")
+
+    uid = uid.strip()
+    if not uid:
+        raise ValueError("El UID de Firebase no puede estar vacío.")
+
+    user_ref = firebase_db.collection("users").document(uid)
+    if not user_ref.get().exists:
+        raise LookupError("No existe un perfil web con ese UID de Firebase.")
+
+    user_ref.set({"nexusCoins": firestore.Increment(amount)}, merge=True)
+
+
+@tienda_group.command(name="nexusplus", description="Consulta los planes y adquiere la suscripción Nexus+.")
+@app_commands.checks.cooldown(1, 10.0)
+async def tienda_nexusplus(interaction: discord.Interaction):
+    track_command(interaction.guild_id, "tienda-nexusplus")
+    planes = "\n".join(f"• **{plan}:** {precio} USD" for plan, precio in NEXUS_PLUS_PLANS)
     embed = build_embed(
-        title="💰 Nexus Pro · Precios y Planes",
+        title="💎 Nexus+ · Suscripción",
         description=(
-            "**Nexus Pro** está disponible en varios planes para adaptarse a tus necesidades.\n\n"
-            "🔹 **Beneficios:** Navegación ultra rápida, protección avanzada, "
-            "soporte 24/7 y funciones exclusivas.\n\n"
-            "📌 **Aceptamos:** Tarjeta, PayPal, Cripto y Transferencia bancaria.\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "**📋 TABLA DE PRECIOS**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━"
+            "Desbloquea la insignia Verificado+, efectos de nombre, soporte prioritario "
+            "y más opciones para tu perfil y tus productos en Nexus Forge.\n\n"
+            f"{planes}\n\n"
+            "Puedes cancelar cuando quieras; tus beneficios siguen activos hasta terminar "
+            "el período pagado. La activación del pago se confirma manualmente, normalmente en menos de 24 horas."
         ),
         color=discord.Color.gold(),
-        fields=[
-            ("💎 Planes disponibles", tabla_precios, False),
-            ("🔄 Conversión", "Tasas de cambio aproximadas:\n🇺🇸 1 USD = 🇨🇴 4,000 COP = 🇧🇷 R$5.50 = 🇦🇷 $950 ARS", False),
-        ],
-        footer="Nexus Pro · Precios sujetos a cambios",
+        footer="Precios en USD · Consulta condiciones y beneficios en la web",
     )
-    
-    await interaction.response.send_message(embed=embed)
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(
+        label="Adquirir Nexus+",
+        style=discord.ButtonStyle.link,
+        url=f"{NEXUS_PLUS_URL}#np-pricing",
+        emoji="💎",
+    ))
+    view.add_item(discord.ui.Button(
+        label="Activar por Discord",
+        style=discord.ButtonStyle.link,
+        url="https://discord.gg/Nahh9XhnvR",
+        emoji="🎫",
+    ))
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+@tienda_group.command(name="activar-nexusplus", description="[Admin] Activa o desactiva Nexus+ en un perfil web.")
+@app_commands.describe(
+    uid="UID de Firebase del perfil web",
+    accion="Activar o desactivar Nexus+",
+    dias="Duración en días al activar (por defecto 30)",
+)
+@app_commands.choices(accion=[
+    app_commands.Choice(name="Activar", value="activar"),
+    app_commands.Choice(name="Desactivar", value="desactivar"),
+])
+@app_commands.check(_is_nexus_store_admin)
+async def tienda_admin_nexusplus(
+    interaction: discord.Interaction,
+    uid: str,
+    accion: app_commands.Choice[str],
+    dias: app_commands.Range[int, 1, 1095] = 30,
+):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    track_command(interaction.guild_id, "tienda-activar-nexusplus")
+    enabled = accion.value == "activar"
+
+    try:
+        expiration = await asyncio.to_thread(_set_firebase_nexus_plus, uid, enabled, dias)
+    except (LookupError, RuntimeError, ValueError) as error:
+        return await interaction.followup.send(str(error), ephemeral=True)
+    except Exception as error:
+        print(f"Error administrando Nexus+ para {uid}: {error}")
+        return await interaction.followup.send("No se pudo actualizar Nexus+. Revisa los logs del bot.", ephemeral=True)
+
+    if enabled:
+        message = f"Nexus+ quedó activo para el perfil `{uid}` hasta <t:{expiration // 1000}:F>."
+    else:
+        message = f"Nexus+ quedó desactivado para el perfil `{uid}`."
+    await interaction.followup.send(message, ephemeral=True)
+    record_log(interaction.guild_id, "moderacion", f"Nexus+ {accion.value} para Firebase UID {uid} por {interaction.user}.", str(interaction.user))
+
+
+@tienda_group.command(name="dar-coins", description="[Admin] Añade Nexus Coins a un perfil web.")
+@app_commands.describe(uid="UID de Firebase del perfil web", cantidad="Cantidad de Nexus Coins para añadir")
+@app_commands.check(_is_nexus_store_admin)
+async def tienda_admin_coins(
+    interaction: discord.Interaction,
+    uid: str,
+    cantidad: app_commands.Range[int, 1, 1000000],
+):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    track_command(interaction.guild_id, "tienda-dar-coins")
+
+    try:
+        await asyncio.to_thread(_grant_firebase_nexus_coins, uid, cantidad)
+    except (LookupError, RuntimeError, ValueError) as error:
+        return await interaction.followup.send(str(error), ephemeral=True)
+    except Exception as error:
+        print(f"Error otorgando Nexus Coins a {uid}: {error}")
+        return await interaction.followup.send("No se pudieron añadir las monedas. Revisa los logs del bot.", ephemeral=True)
+
+    await interaction.followup.send(f"Se añadieron **{cantidad:,} Nexus Coins** al perfil `{uid}`.", ephemeral=True)
+    record_log(interaction.guild_id, "moderacion", f"{interaction.user} añadió {cantidad} Nexus Coins al Firebase UID {uid}.", str(interaction.user))
+
+
+@tienda_group.command(name="coins", description="Consulta los paquetes y adquiere Nexus Coins.")
+@app_commands.checks.cooldown(1, 10.0)
+async def tienda_coins(interaction: discord.Interaction):
+    track_command(interaction.guild_id, "tienda-coins")
+    paquetes = "\n".join(
+        f"• **{cantidad} Nexus Coins:** {precio} USD · {nombre}"
+        for cantidad, precio, nombre in NEXUS_COIN_PACKAGES
+    )
+    embed = build_embed(
+        title="🪙 Nexus Coins · Paquetes",
+        description=(
+            "Recarga monedas para desbloquear opciones de personalización, decoraciones "
+            "y ventajas disponibles en la web y en aplicaciones del estudio, como NexusMusic.\n\n"
+            f"{paquetes}\n\n"
+            "Son paquetes de monedas, no una suscripción."
+        ),
+        color=COLOR_MAIN,
+        footer="Precios en USD · La disponibilidad de ventajas depende de cada producto",
+    )
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(
+        label="Comprar Nexus Coins",
+        style=discord.ButtonStyle.link,
+        url=f"{NEXUS_PLUS_URL}#np-coins",
+        emoji="🪙",
+    ))
+    view.add_item(discord.ui.Button(
+        label="Enviar comprobante por Discord",
+        style=discord.ButtonStyle.link,
+        url="https://discord.gg/Nahh9XhnvR",
+        emoji="🎫",
+    ))
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+@tienda_group.command(name="precios", description="Publica los precios de Nexus+ y Nexus Coins.")
+@app_commands.checks.cooldown(1, 30.0)
+async def tienda_precios(interaction: discord.Interaction):
+    track_command(interaction.guild_id, "tienda-precios")
+    planes = "\n".join(f"**{plan}:** {precio}" for plan, precio in NEXUS_PLUS_PLANS)
+    paquetes = "\n".join(
+        f"**{cantidad} Coins:** {precio} · {nombre}"
+        for cantidad, precio, nombre in NEXUS_COIN_PACKAGES
+    )
+    embed = build_embed(
+        title="🛍️ Nexus · Tienda y precios",
+        description="Precios en USD, según los planes publicados en la web.",
+        color=COLOR_MAIN,
+        fields=[
+            ("💎 Nexus+ · Suscripción", planes, True),
+            ("🪙 Nexus Coins · Paquetes", paquetes, True),
+        ],
+        footer="Nexus+ es una suscripción; Nexus Coins se venden en paquetes.",
+    )
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(
+        label="Ver Nexus+",
+        style=discord.ButtonStyle.link,
+        url=f"{NEXUS_PLUS_URL}#np-pricing",
+        emoji="💎",
+    ))
+    view.add_item(discord.ui.Button(
+        label="Ver Nexus Coins",
+        style=discord.ButtonStyle.link,
+        url=f"{NEXUS_PLUS_URL}#np-coins",
+        emoji="🪙",
+    ))
+    await interaction.response.send_message(embed=embed, view=view)
+
+
+bot.tree.add_command(tienda_group)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -5117,7 +5426,7 @@ async def nexus_free_public(interaction: discord.Interaction):
 async def pagina_web(interaction: discord.Interaction):
     track_command(interaction.guild_id, "pagina-web")
     
-    URL_WEB = "https://nexusforgex.vercel.app"
+    URL_WEB = "https://nexusforgex.xyz/"
     
     record_log(
         interaction.guild_id, 
@@ -5455,7 +5764,7 @@ class PollView(discord.ui.View):
         expires = self.poll_data.get("expires_at")
         color = COLOR_MAIN if not self.poll_data.get("finished", False) else COLOR_WARN
         
-        embed = discord.Embed(
+        embed = nexus_embed(
             title=title,
             description=description,
             color=color,
@@ -5691,7 +6000,7 @@ async def resultados_encuesta(interaction: discord.Interaction, poll_id: str):
     results = get_results(poll_data)
     total = poll_data["total_votes"]
     
-    embed = discord.Embed(
+    embed = nexus_embed(
         title=f"📊 Resultados: {poll_data['question']}",
         color=COLOR_PURPLE,
         timestamp=datetime.now(timezone.utc)
@@ -5732,7 +6041,7 @@ async def listar_encuestas(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
-    embed = discord.Embed(
+    embed = nexus_embed(
         title=f"📋 Encuestas activas ({len(active_polls)})",
         color=COLOR_MAIN,
         timestamp=datetime.now(timezone.utc)
@@ -5833,7 +6142,7 @@ async def stats_cmd(interaction: discord.Interaction):
 
 @bot.tree.command(name="ayuda", description="Muestra el menú de ayuda con todos los comandos.")
 async def ayuda(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "ayuda")
+    schedule_music_log(track_command, interaction.guild_id, "ayuda")
     embed = build_embed(
         title="📖 Centro de ayuda · Nexus System",
         description=(
@@ -5841,16 +6150,18 @@ async def ayuda(interaction: discord.Interaction):
             "🌐 **General** — comandos para todos\n"
             "🛡️ **Administración** — requieren permisos de admin\n"
             "📊 **Estadísticas** — analíticas del servidor\n"
-            "🛡️ **Moderación** — comandos de moderación avanzada"
+            "🛡️ **Moderación** — comandos de moderación avanzada\n"
+            "🎵 **Música** — reproductor y cola\n"
+            "✨ **Studio** — editor y herramientas nuevas"
         ),
         color=COLOR_MAIN,
         footer="Nexus System · Usa el menú para explorar",
     )
     view = HelpView(autor_id=interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True, **banner(embed, "help"))
 
 
-@bot.tree.command(name="ayuda-error", description="Te ayuda a diagnosticar un mensaje de error.")
+@nexus_group.command(name="ayuda-error", description="Te ayuda a diagnosticar un mensaje de error.")
 @app_commands.describe(mensaje_error="Pega aquí el mensaje de error que recibiste")
 async def ayuda_error(interaction: discord.Interaction, mensaje_error: str):
     track_command(interaction.guild_id, "ayuda-error")
@@ -5957,11 +6268,17 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             description=f"El bot necesita: `{', '.join(error.missing_permissions)}`.",
             color=COLOR_WARN,
         )
+    elif isinstance(error, app_commands.CheckFailure):
+        embed = build_embed(
+            title="🔒 Permiso insuficiente",
+            description="Esta acción está reservada al propietario o administrador configurado del bot.",
+            color=COLOR_WARN,
+        )
     else:
         print(f"Error en comando: {error}")
         embed = build_embed(
             title="❌ Ocurrió un error",
-            description="Usa `/ayuda-error` y pega el mensaje de error para obtener un diagnóstico.",
+            description="Usa `/nexus ayuda-error` y pega el mensaje de error para obtener un diagnóstico.",
             color=COLOR_WARN,
         )
 
@@ -5984,21 +6301,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
 
 
-
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Nexus bot está vivo."
-
-def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
-
-def keep_alive():
-    t = threading.Thread(target=run_web)
-    t.daemon = True
-    t.start()
 
 # ──────────────────────────────────────────────────────────────
 #  PANEL DE ANUNCIOS (/announce)
@@ -6075,7 +6377,7 @@ class AnnounceModal(discord.ui.Modal):
                 color = 0x5865F2
         
         # Crear embed profesional
-        embed = discord.Embed(
+        embed = nexus_embed(
             title=f"📢 {self.titulo.value}",
             description=self.mensaje.value,
             color=color,
@@ -6465,7 +6767,7 @@ class AdminBanModal(discord.ui.Modal):
         
         # Intentar enviar DM
         try:
-            dm_embed = discord.Embed(
+            dm_embed = nexus_embed(
                 title="🔨 Has sido baneado",
                 description=f"Has sido baneado de **{guild.name}**.",
                 color=COLOR_WARN,
@@ -6567,7 +6869,7 @@ class AdminKickModal(discord.ui.Modal):
         
         # DM
         try:
-            dm_embed = discord.Embed(
+            dm_embed = nexus_embed(
                 title="👋 Has sido expulsado",
                 description=f"Has sido expulsado de **{guild.name}**.",
                 color=COLOR_WARN,
@@ -6713,7 +7015,7 @@ class AdminMuteModal(discord.ui.Modal):
         
         # DM
         try:
-            dm_embed = discord.Embed(
+            dm_embed = nexus_embed(
                 title="🔇 Has sido muteado",
                 description=f"Has sido muteado en **{guild.name}**.",
                 color=COLOR_WARN,
@@ -6786,7 +7088,7 @@ class AdminUnmuteModal(discord.ui.Modal):
         
         # DM
         try:
-            dm_embed = discord.Embed(
+            dm_embed = nexus_embed(
                 title="🔊 Has sido desmuteado",
                 description=f"Has sido desmuteado en **{guild.name}**.",
                 color=COLOR_OK,
@@ -6816,12 +7118,12 @@ class AdminUnmuteModal(discord.ui.Modal):
 @app_commands.checks.has_permissions(administrator=True)
 async def paneladmin(interaction: discord.Interaction):
     """Panel interactivo con botones para moderación."""
-    track_command(interaction.guild_id, "paneladmin")
+    schedule_music_log(track_command, interaction.guild_id, "paneladmin")
     
     embed = build_embed(
-        title="🛡️ Panel de Administración",
+        title="🛡️ Nexus · Administración",
         description=(
-            "**Selecciona una acción:**\n\n"
+            "## Centro de control\n> Selecciona una acción de moderación.\n\n"
             "🔨 **Banear** — Banea a un usuario (con duración)\n"
             "👢 **Kickear** — Expulsa a un usuario\n"
             "🔇 **Mutear** — Mutea a un usuario (con duración)\n"
@@ -6834,7 +7136,7 @@ async def paneladmin(interaction: discord.Interaction):
     )
     
     view = AdminPanelView(interaction.user.id, interaction.guild_id)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True, **banner(embed, "help"))
 
 
 # ──────────────────────────────────────────────────────────────
@@ -7633,13 +7935,14 @@ async def modstats_cmd(interaction: discord.Interaction):
 ])
 @app_commands.checks.has_permissions(administrator=True)
 async def antilink_cmd(interaction: discord.Interaction, estado: app_commands.Choice[str]):
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     cfg["antilink_enabled"] = (estado.value == "on")
     update_guild_config(interaction.guild_id, cfg)
 
     desc = "Ahora se eliminarán automáticamente los mensajes con links de usuarios sin permisos de gestión de mensajes." if cfg["antilink_enabled"] else "El borrado automático de links fue desactivado."
     embed = build_embed(title="🔗 Antilink actualizado", description=desc, color=Config.COLOR_SUCCESS)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="antispam", description="🚫 Activa o desactiva la protección antispam.")
@@ -7650,13 +7953,14 @@ async def antilink_cmd(interaction: discord.Interaction, estado: app_commands.Ch
 ])
 @app_commands.checks.has_permissions(administrator=True)
 async def antispam_cmd(interaction: discord.Interaction, estado: app_commands.Choice[str]):
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     cfg["antispam_enabled"] = (estado.value == "on")
     update_guild_config(interaction.guild_id, cfg)
 
     desc = "Ahora se detectará y silenciará automáticamente a quien mande mensajes repetidos muy rápido (5 en 5s)." if cfg["antispam_enabled"] else "La protección antispam fue desactivada."
     embed = build_embed(title="🚫 Antispam actualizado", description=desc, color=Config.COLOR_SUCCESS)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -7709,7 +8013,7 @@ class DMModal(discord.ui.Modal):
             except:
                 color = 0x5865F2
 
-        embed = discord.Embed(
+        embed = nexus_embed(
             title=f"✉️ {self.titulo.value}",
             description=self.mensaje.value,
             color=color,
@@ -7822,28 +8126,31 @@ async def purge_messages(interaction: discord.Interaction, cantidad: app_command
 @bot.tree.command(name="lock", description="🔒 Bloquea el canal actual para usuarios normales.")
 @app_commands.checks.has_permissions(manage_channels=True)
 async def lock_channel(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
     await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)
     embed = build_embed(title="Canal Bloqueado", description="Este canal ha sido bloqueado por moderación. 🥀", color=Config.COLOR_ERROR)
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
     record_log(interaction.guild_id, "Lock", f"Canal #{interaction.channel.name} bloqueado", str(interaction.user))
 
 @bot.tree.command(name="unlock", description="🔓 Desbloquea el canal actual.")
 @app_commands.checks.has_permissions(manage_channels=True)
 async def unlock_channel(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
     await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=True)
     embed = build_embed(title="Canal Desbloqueado", description="Este canal ha sido desbloqueado. 🌸", color=Config.COLOR_SUCCESS)
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
     record_log(interaction.guild_id, "Unlock", f"Canal #{interaction.channel.name} desbloqueado", str(interaction.user))
 
 @bot.tree.command(name="canal-trampa", description="🥀 Configura un canal trampa (Honeypot) para banear intrusos.")
 @app_commands.describe(canal="El canal que funcionará como trampa")
 @app_commands.checks.has_permissions(administrator=True)
 async def set_trap_channel(interaction: discord.Interaction, canal: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True, thinking=True)
     guild_cfg = get_guild_config(interaction.guild_id)
     guild_cfg["trap_channel_id"] = canal.id
     update_guild_config(interaction.guild_id, guild_cfg)
     embed = build_embed(title="Canal Trampa Configurado", description=f"El canal {canal.mention} ahora es una trampa. Cualquier usuario que escriba ahí será baneado. 🥀", color=Config.COLOR_SUCCESS)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -7901,13 +8208,14 @@ async def afk_cmd(interaction: discord.Interaction, razon: str = "Sin especifica
 @bot.tree.command(name="sugerencia", description="💡 Manda una sugerencia al buzón del servidor.")
 @app_commands.describe(texto="Tu sugerencia")
 async def sugerencia_cmd(interaction: discord.Interaction, texto: str):
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     channel_id = cfg.get("suggestions_channel")
     channel = interaction.guild.get_channel(int(channel_id)) if channel_id else interaction.channel
 
     if not channel:
         embed = build_embed(title="❌ Error", description="No se encontró el canal de sugerencias configurado.", color=COLOR_WARN)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await interaction.followup.send(embed=embed, ephemeral=True)
 
     embed = build_embed(
         title="💡 Nueva sugerencia",
@@ -7925,7 +8233,7 @@ async def sugerencia_cmd(interaction: discord.Interaction, texto: str):
         pass
 
     confirm = build_embed(title="✅ Sugerencia enviada", description=f"Tu sugerencia se publicó en {channel.mention}.", color=COLOR_OK)
-    await interaction.response.send_message(embed=confirm, ephemeral=True)
+    await interaction.followup.send(embed=confirm, ephemeral=True)
     record_log(interaction.guild_id, "moderacion", f"{interaction.user} envió una sugerencia: {texto[:60]}", str(interaction.user))
 
 
@@ -7933,11 +8241,12 @@ async def sugerencia_cmd(interaction: discord.Interaction, texto: str):
 @app_commands.describe(canal="Canal para las sugerencias")
 @app_commands.checks.has_permissions(administrator=True)
 async def config_sugerencias_cmd(interaction: discord.Interaction, canal: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     cfg["suggestions_channel"] = canal.id
     update_guild_config(interaction.guild_id, cfg)
     embed = build_embed(title="💡 Canal configurado", description=f"Las sugerencias ahora se publican en {canal.mention}.", color=COLOR_OK)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -7948,6 +8257,7 @@ async def config_sugerencias_cmd(interaction: discord.Interaction, canal: discor
 @app_commands.describe(rol="Rol a asignar automáticamente (dejar vacío para desactivar)")
 @app_commands.checks.has_permissions(administrator=True)
 async def autorole_cmd(interaction: discord.Interaction, rol: discord.Role | None = None):
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     cfg["autorole_id"] = rol.id if rol else None
     update_guild_config(interaction.guild_id, cfg)
@@ -7956,7 +8266,7 @@ async def autorole_cmd(interaction: discord.Interaction, rol: discord.Role | Non
         embed = build_embed(title="🎭 Autorole configurado", description=f"Cada nuevo miembro recibirá el rol {rol.mention} automáticamente.", color=COLOR_OK)
     else:
         embed = build_embed(title="🎭 Autorole desactivado", description="Ya no se asignará ningún rol automático.", color=COLOR_WARN)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -8110,7 +8420,7 @@ async def panel_autoroles_cmd(
         embed = build_embed(title="❌ Faltan roles", description="Tenés que indicar al menos un rol (`rol1`).", color=COLOR_WARN)
         return await interaction.followup.send(embed=embed, ephemeral=True)
 
-    embed = discord.Embed(
+    embed = nexus_embed(
         title=titulo,
         description=(descripcion + "\n\n" if descripcion else "") + "Hacé clic en un botón para ponerte o quitarte ese rol.\n\n" + "\n".join(lineas_desc),
         color=COLOR_PURPLE,
@@ -8149,23 +8459,24 @@ async def panel_autoroles_cmd(
 @app_commands.checks.has_permissions(administrator=True)
 async def panel_autoroles_quitar_cmd(interaction: discord.Interaction, message_id: str):
     track_command(interaction.guild_id, "panel-autoroles-quitar")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     panels = cfg.get("autorole_panels") or []
     try:
         target_id = int(message_id)
     except ValueError:
         embed = build_embed(title="❌ ID inválido", description="El `message_id` debe ser un número.", color=COLOR_WARN)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await interaction.followup.send(embed=embed, ephemeral=True)
 
     nuevos = [p for p in panels if p.get("message_id") != target_id]
     if len(nuevos) == len(panels):
         embed = build_embed(title="❌ No encontrado", description="No hay ningún panel guardado con ese `message_id`.", color=COLOR_WARN)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await interaction.followup.send(embed=embed, ephemeral=True)
 
     cfg["autorole_panels"] = nuevos
     update_guild_config(interaction.guild_id, cfg)
     embed = build_embed(title="🗑️ Panel eliminado", description="Se eliminó de la configuración. Los botones dejarán de funcionar en el mensaje original después del próximo reinicio del bot (o podés borrar el mensaje manualmente).", color=COLOR_OK)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -8435,6 +8746,7 @@ async def config_verificacion_cmd(
     nivel: app_commands.Choice[int],
     canal: discord.TextChannel | None = None
 ):
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     cfg["verify_enabled"] = True
     cfg["verify_role_id"] = rol_verificado.id
@@ -8454,17 +8766,18 @@ async def config_verificacion_cmd(
             ("🎯 Nivel", nivel.name, True),
         ]
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="panel-verificacion", description="[Admin] Publica el panel con el botón de verificación.")
 @app_commands.describe(canal="Canal donde publicar el panel (por defecto el canal actual)")
 @app_commands.checks.has_permissions(administrator=True)
 async def panel_verificacion_cmd(interaction: discord.Interaction, canal: discord.TextChannel | None = None):
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     if not cfg.get("verify_enabled"):
         embed = build_embed(title="❌ Falta configurar", description="Primero corré `/config-verificacion` para configurar los roles y el nivel.", color=COLOR_WARN)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await interaction.followup.send(embed=embed, ephemeral=True)
 
     target = canal or interaction.channel
     nivel = cfg.get("verify_level", 1)
@@ -8482,7 +8795,7 @@ async def panel_verificacion_cmd(interaction: discord.Interaction, canal: discor
     await target.send(embed=embed, view=VerifyPanelView())
 
     confirm = build_embed(title="✅ Panel publicado", description=f"El panel de verificación se publicó en {target.mention}.", color=COLOR_OK)
-    await interaction.response.send_message(embed=confirm, ephemeral=True)
+    await interaction.followup.send(embed=confirm, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -8509,7 +8822,7 @@ async def roleinfo_cmd(interaction: discord.Interaction, rol: discord.Role):
         if activo:
             permisos_clave.append(f"✅ {nombre}")
 
-    embed = discord.Embed(
+    embed = nexus_embed(
         title=f"🎭 Información del rol · {rol.name}",
         color=rol.color if rol.color.value else COLOR_MAIN,
         timestamp=datetime.now(timezone.utc),
@@ -8531,7 +8844,7 @@ async def roleinfo_cmd(interaction: discord.Interaction, rol: discord.Role):
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="botinfo", description="🤖 Muestra el estado técnico del bot.")
+@nexus_group.command(name="botinfo", description="🤖 Muestra el estado técnico del bot.")
 async def botinfo_cmd(interaction: discord.Interaction):
     track_command(interaction.guild_id, "botinfo")
 
@@ -8539,7 +8852,7 @@ async def botinfo_cmd(interaction: discord.Interaction):
     latencia = round(bot.latency * 1000)
     total_miembros = sum(g.member_count or 0 for g in bot.guilds)
 
-    embed = discord.Embed(
+    embed = nexus_embed(
         title="🤖 Estado de Nexus",
         color=COLOR_MAIN,
         timestamp=datetime.now(timezone.utc),
@@ -8612,6 +8925,7 @@ async def config_niveles_cmd(
     cooldown: app_commands.Range[int, 0, 3600] | None = None,
 ):
     track_command(interaction.guild_id, "config-niveles")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
 
     if estado is not None:
@@ -8643,7 +8957,7 @@ async def config_niveles_cmd(
             ("Cooldown", f"{cfg.get('level_cooldown', 60)}s", True),
         ],
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="config-niveles-canal-excluir", description="[Admin] Excluye o vuelve a incluir un canal del sistema de XP.")
@@ -8651,6 +8965,7 @@ async def config_niveles_cmd(
 @app_commands.checks.has_permissions(administrator=True)
 async def config_niveles_canal_excluir_cmd(interaction: discord.Interaction, canal: discord.TextChannel):
     track_command(interaction.guild_id, "config-niveles-canal-excluir")
+    await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     excluidos = cfg.setdefault("level_no_xp_channels", [])
 
@@ -8667,7 +8982,7 @@ async def config_niveles_canal_excluir_cmd(interaction: discord.Interaction, can
         description=f"El canal {canal.mention} ahora **{accion}**.",
         color=COLOR_OK,
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="nivel", description="🏆 Muestra tu nivel y XP (o el de otro usuario).")
@@ -8783,7 +9098,9 @@ import time
 
 def auto_keep_alive():
     """Hace ping a sí mismo cada 5 minutos para evitar que Render duerma"""
-    url = "https://bot-nexus-1-nego.onrender.com/ping"
+    base = os.getenv("NEXUS_PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    if not base: return
+    url = base.rstrip("/") + "/ping"
     while True:
         try:
             response = requests.get(url, timeout=10)
@@ -8832,6 +9149,9 @@ KeysPanelView = setup_keys_system(
 # ──────────────────────────────────────────────────────────────
 #  MAIN
 # ──────────────────────────────────────────────────────────────
+
+HELP_CATEGORIES["studio"] = {"label": "✨ Studio y herramientas", "description": "Diseño, invitaciones y nuevas utilidades.", "commands": [("/embed", "Editor visual de embeds con vista previa."), ("/nexus invitar", "Enlace para añadir el bot."), ("/nexus comandos", "Busca cualquier comando por nombre."), ("/nexus musica-estado", "Diagnóstico de la sesión."), ("/nexus cola-limpiar", "Limpia las canciones pendientes.")]}
+setup_ui(bot, build_embed, get_music_state, nexus_group)
 
 if __name__ == "__main__":
     if not TOKEN:

@@ -26,6 +26,17 @@ El bot también registra automáticamente en el canal de logs correspondiente
 cuando alguien **edita** o **borra** un mensaje (si configuraste esos canales
 con `/config-logs`).
 
+## Administración de Nexus+ y Nexus Coins
+
+El bot puede cambiar las membresías y monedas de los perfiles web con estas acciones restringidas:
+
+- `/tienda activar-nexusplus`: activa o desactiva Nexus+ para un UID de Firebase. Al activar, la duración predeterminada es de 30 días; se puede indicar entre 1 y 1095 días.
+- `/tienda dar-coins`: añade Nexus Coins al perfil indicado por su UID de Firebase.
+
+Solo `OWNER_ID` o `ADMIN_USER_ID` pueden ejecutar estas acciones. El UID es el ID del documento del usuario en la colección `users` de Firestore.
+
+Para habilitarlas, crea una cuenta de servicio de Firebase con acceso de lectura y escritura a Firestore y configura su JSON completo en la variable de entorno `FIREBASE_SERVICE_ACCOUNT_JSON` del servidor (por ejemplo, en Render → Environment). No guardes ni publiques ese JSON en el repositorio. Sin esta variable, los comandos de tienda siguen disponibles, pero las acciones administrativas no modifican cuentas.
+
 ## ⚠️ Seguridad del token
 
 El token del bot **nunca** va escrito dentro del código ni se sube a

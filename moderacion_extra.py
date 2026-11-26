@@ -140,6 +140,7 @@ def setup_moderacion_extra(
     ])
     @app_commands.checks.has_permissions(administrator=True)
     async def config_bot_kicker_cmd(interaction: discord.Interaction, estado: app_commands.Choice[str]):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         cfg = get_guild_config(interaction.guild_id)
         cfg["bot_kicker_enabled"] = (estado.value == "activar")
         update_guild_config(interaction.guild_id, cfg)
@@ -149,7 +150,7 @@ def setup_moderacion_extra(
             "El kicker de bots fue desactivado."
         )
         embed = build_embed(title=f"{EMOJIS['checkmark']} Bot-kicker actualizado", description=desc, color=COLOR_OK)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @config_group.command(name="antiscam", description="Activa/desactiva el filtro anti-estafas (links falsos de nitro/cripto).")
     @app_commands.describe(estado="Activar o desactivar")
@@ -159,12 +160,13 @@ def setup_moderacion_extra(
     ])
     @app_commands.checks.has_permissions(administrator=True)
     async def config_antiscam_cmd(interaction: discord.Interaction, estado: app_commands.Choice[str]):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         cfg = get_guild_config(interaction.guild_id)
         cfg["antiscam_enabled"] = (estado.value == "activar")
         update_guild_config(interaction.guild_id, cfg)
         desc = "Se borrarán mensajes con links/textos típicos de estafas (nitro falso, airdrops, etc.) y se muteará al autor." if cfg["antiscam_enabled"] else "Anti-scam desactivado."
         embed = build_embed(title=f"{EMOJIS['checkmark']} Anti-scam actualizado", description=desc, color=COLOR_OK)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @config_group.command(name="antieveryone", description="Activa/desactiva el bloqueo de @everyone/@here abusivo.")
     @app_commands.describe(estado="Activar o desactivar")
@@ -174,17 +176,19 @@ def setup_moderacion_extra(
     ])
     @app_commands.checks.has_permissions(administrator=True)
     async def config_antieveryone_cmd(interaction: discord.Interaction, estado: app_commands.Choice[str]):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         cfg = get_guild_config(interaction.guild_id)
         cfg["antieveryone_enabled"] = (estado.value == "activar")
         update_guild_config(interaction.guild_id, cfg)
         desc = "Se borrará cualquier @everyone/@here de usuarios sin permiso de gestión del server." if cfg["antieveryone_enabled"] else "Anti-@everyone desactivado."
         embed = build_embed(title=f"{EMOJIS['checkmark']} Anti-@everyone actualizado", description=desc, color=COLOR_OK)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @config_group.command(name="jail-rol", description="Define qué rol se usa para /jail.")
     @app_commands.describe(rol="Rol de castigo (configurá sus permisos de canal en Discord)")
     @app_commands.checks.has_permissions(administrator=True)
     async def config_jail_rol_cmd(interaction: discord.Interaction, rol: discord.Role):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         cfg = get_guild_config(interaction.guild_id)
         cfg["jail_role_id"] = rol.id
         update_guild_config(interaction.guild_id, cfg)
@@ -193,7 +197,7 @@ def setup_moderacion_extra(
             description=f"Se usará {rol.mention}. Acordate de restringir sus permisos en los canales del server.",
             color=COLOR_OK,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     # Subcomandos dentro del grupo /ticket
 
@@ -201,6 +205,7 @@ def setup_moderacion_extra(
     @app_commands.describe(categoria="Categoría donde se crean los tickets", rol_staff="Rol que puede ver y atender los tickets")
     @app_commands.checks.has_permissions(administrator=True)
     async def ticket_config_cmd(interaction: discord.Interaction, categoria: discord.CategoryChannel, rol_staff: discord.Role):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         cfg = get_guild_config(interaction.guild_id)
         cfg["ticket_category_id"] = categoria.id
         cfg["ticket_staff_role_id"] = rol_staff.id
@@ -210,12 +215,13 @@ def setup_moderacion_extra(
             description=f"Categoría: {categoria.mention if hasattr(categoria, 'mention') else categoria.name}\nStaff: {rol_staff.mention}",
             color=COLOR_OK,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @ticket_group.command(name="panel", description="Publica el panel para abrir tickets.")
     @app_commands.describe(canal="Canal donde publicar (por defecto el actual)")
     @app_commands.checks.has_permissions(administrator=True)
     async def ticket_panel_cmd(interaction: discord.Interaction, canal: discord.TextChannel | None = None):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         target = canal or interaction.channel
         embed = build_embed(
             title=f"{EMOJIS['discorddevelopers']} Soporte — NEXUS",
@@ -225,7 +231,7 @@ def setup_moderacion_extra(
         )
         await target.send(embed=embed, view=TicketPanelView())
         confirm = build_embed(title="✅ Panel publicado", description=f"Se publicó en {target.mention}.", color=COLOR_OK)
-        await interaction.response.send_message(embed=confirm, ephemeral=True)
+        await interaction.followup.send(embed=confirm, ephemeral=True)
 
     # Añadir los grupos al bot tree
     bot.tree.add_command(config_group)
