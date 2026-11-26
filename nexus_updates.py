@@ -9,7 +9,7 @@ from datetime import datetime
 import aiohttp
 import discord
 from discord import app_commands
-from nexus_release_core import manifest, releases, RELEASES_URL, MANIFEST_URL, REPO_URL, WEBS, should_announce
+from nexus_release_core import manifest, releases, RELEASES_URL, MANIFEST_URL, REPO_URL, WEBS, manifest_release, manifest_action, mark_manifest
 from nexus_ui import banner, animated, set_style_context
 
 log=logging.getLogger(__name__)
@@ -17,6 +17,29 @@ NO_MENTIONS=discord.AllowedMentions.none()
 TABLE='nexusmusic_updates'
 LOCAL=Path('nexusmusic_updates.json')
 RED=0xD92138
+
+def storage_error(exc):
+    import re
+    text=str(exc)
+    match=re.search(r'Supabase HTTP (\d{3})(?: \[([A-Za-z0-9_-]+)\])?',text)
+    if match:
+        status,code=match.groups()
+        if status=='404' or code in ('PGRST205','42P01'):
+            return 'Supabase: falta la tabla nexusmusic_updates. Ejecuta SUPABASE-NEXUSMUSIC-UPDATES.sql en el proyecto del bot.'
+        if status in ('401','403'):
+            return f'Supabase HTTP {status}: revisa la clave sb_secret_ y los permisos de la tabla.'
+        return f'Supabase HTTP {status}'+(f' [{code}]' if code else '')+'. Revisa el esquema y los permisos de nexusmusic_updates.'
+    if 'Supabase:' in text: return 'Supabase: error de conexión o tiempo de espera; revisa el estado del proyecto y la red.'
+    return 'Error de almacenamiento ('+type(exc).__name__+'). Revisa los logs del bot.'
+
+
+def feed_error(exc):
+    import re
+    m=re.fullmatch(r'GitHub HTTP (\d{3})',str(exc))
+    if m: return f'GitHub HTTP {m.group(1)}: no pude consultar el feed oficial.'
+    if isinstance(exc,ValueError): return 'El feed oficial devolvió JSON inválido o inesperado.'
+    return 'No pude consultar GitHub ('+type(exc).__name__+').'
+
 
 class Feed:
     def __init__(self):
@@ -83,7 +106,7 @@ class Store:
 
 
 def date_label(value):
-    try: return f'<t:{int(datetime.fromisoformat(value.replace("Z","+00:00")).timestamp())}:D>'
+    try: return f'<t:{int(datetime.fromisoformat((value or "").replace("Z","+00:00")).timestamp())}:D>'
     except (ValueError,TypeError): return 'Fecha no disponible'
 
 
@@ -101,14 +124,14 @@ def setup_updates(bot,build_embed,config_group,client):
         return banner(e,kind)
     def make(title,desc,fields=None): return build_embed(title=title,description=desc,color=RED,fields=fields,footer='NEXUSMUSIC  •  Nexus Studios')
     def release_embed(r):
-        return make('⬇️ Nueva actualización de NexusMusic',f'## {r["version"]} · Android\n> Ya está disponible una nueva versión de la aplicación.\n\nDescarga el APK oficial desde GitHub.',[('Versión',f'`{r["version"]}`',True),('Publicación',date_label(r['published']),True),('Tamaño',f'{r["size"]/1048576:.1f} MB',True)])
+        return make('⬇️ Nueva actualización de NexusMusic',f'## {r["version"]} · Android\n> Ya está disponible una nueva versión de la aplicación.\n\nDescarga el APK oficial desde GitHub.',[('Versión',f'`{r["version"]}`',True),('Fuente', 'Manifiesto oficial' if not r.get('published') else date_label(r['published']),True),('Tamaño',f'{r["size"]/1048576:.1f} MB' if r.get('size') is not None else 'Consultar descarga',True)])
     async def state(gid):
         if gid not in states: states[gid]=await asyncio.to_thread(store.load,gid)
         return states[gid]
     async def save(gid,d):
         await asyncio.to_thread(store.save,gid,d); states[gid]=d
     async def announce(guild,r,d):
-        ch=guild.get_channel(d.get('channel',0))
+        ch=guild.get_channel(int(d.get('channel') or 0))
         if not isinstance(ch,discord.TextChannel) or not guild.me: return False
         perms=ch.permissions_for(guild.me)
         if not (perms.send_messages and perms.embed_links): return False
@@ -129,22 +152,47 @@ def setup_updates(bot,build_embed,config_group,client):
         await i.response.defer(ephemeral=True,thinking=True); styled(i)
         if canal and (not canal.permissions_for(i.user).manage_channels or not i.guild.me or not canal.permissions_for(i.guild.me).send_messages or not canal.permissions_for(i.guild.me).embed_links):
             return await i.followup.send('Necesitas gestionar ese canal y el bot debe poder enviar mensajes e insertar enlaces.',ephemeral=True)
+        # Persist channel first; an unavailable GitHub feed must not undo it.
         try:
-            r=await feed.latest() if canal else None
-            if canal and not r: raise RuntimeError('No hay APK estable publicada')
             async with lock:
-                d=dict(await state(i.guild_id)); d.update(channel=canal.id if canal else None,last=r['key'] if r else d.get('last'),last_published=r['published'] if r else d.get('last_published'))
-                await save(i.guild_id,d); pending.pop(i.guild_id,None)
-                if canal and avisar_actual:
-                    try:
-                        if not await announce(i.guild,r,d): raise RuntimeError('Canal no disponible')
-                    except (discord.HTTPException,RuntimeError):
-                        return await i.followup.send('Canal guardado; no pude publicar la versión actual. Revisa los permisos.',ephemeral=True)
-            e=make('✦ Centro de actualizaciones',f'**Canal:** {canal.mention if canal else "Desactivado"}\n> Se revisa GitHub cada 5 minutos mientras el bot esté activo.\n'+(f'**Versión de referencia:** `{r["version"]}`' if r else 'No se enviarán avisos.'))
-            await i.followup.send(embed=e,ephemeral=True,**art(e,'update',i.channel),allowed_mentions=NO_MENTIONS)
+                d=dict(await state(i.guild_id))
+                d.update(channel=canal.id if canal else None, announce_current=bool(canal and avisar_actual))
+                if canal:
+                    # New configuration starts from the current official manifest.
+                    d.pop('last_manifest',None); d.pop('last_version',None)
+                await save(i.guild_id,d)
+                pending.pop(i.guild_id,None)
         except Exception as exc:
-            log.warning('Configurar actualizaciones: %s',type(exc).__name__)
-            await i.followup.send('No pude guardar el canal o consultar GitHub. Revisa la tabla `nexusmusic_updates`, la conexión y los permisos.',ephemeral=True)
+            detail=storage_error(exc)
+            log.warning('Configurar canal APK guild=%s: %s',i.guild_id,detail)
+            return await i.followup.send('No pude guardar el canal. '+detail,ephemeral=True)
+        if not canal:
+            return await i.followup.send('Avisos APK desactivados. Configuración guardada.',ephemeral=True)
+        try:
+            r=manifest_release(await feed.get(MANIFEST_URL))
+        except Exception as exc:
+            detail=feed_error(exc)
+            log.warning('Canal APK guardado; manifiesto: %s',detail)
+            return await i.followup.send('✅ Canal guardado. '+detail+' El monitor reintentará automáticamente; '+('publicará la versión actual cuando pueda.' if avisar_actual else 'tomará la primera versión disponible como referencia.'),ephemeral=True)
+        try:
+            async with lock:
+                d=await state(i.guild_id)
+                if d.get('channel')!=canal.id:
+                    return await i.followup.send('La configuración cambió mientras consultaba GitHub.',ephemeral=True)
+                action=manifest_action(d,r)
+                if action=='announce' and not await announce(i.guild,r,d):
+                    return await i.followup.send('Canal guardado. Aviso pendiente: revisa permisos del bot.',ephemeral=True)
+                if action in ('announce','baseline'):
+                    new=mark_manifest(d,r)
+                    pending[i.guild_id]=new
+                    await save(i.guild_id,new); pending.pop(i.guild_id,None)
+        except discord.HTTPException as exc:
+            return await i.followup.send(f'Canal guardado. Discord rechazó el aviso (HTTP {exc.status}); revisa permisos. Se reintentará.',ephemeral=True)
+        except Exception as exc:
+            log.warning('Finalizar aviso APK: %s',storage_error(exc))
+            return await i.followup.send('Canal guardado. La confirmación de versión quedó pendiente: '+storage_error(exc),ephemeral=True)
+        e=make('✦ Centro de actualizaciones',f'**Canal:** {canal.mention}\n> Se revisa el manifiesto oficial cada 5 minutos mientras el bot esté activo.\n**Versión de referencia:** `{r["version"]}`')
+        await i.followup.send(embed=e,ephemeral=True,**art(e,'update',i.channel),allowed_mentions=NO_MENTIONS)
     @config_group.command(name='sticker-ac',description='Configura un sticker de este servidor para los avisos APK')
     @app_commands.guild_only()
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -183,14 +231,18 @@ def setup_updates(bot,build_embed,config_group,client):
     async def versions(i:discord.Interaction):
         await i.response.defer(thinking=True); styled(i)
         try: items=await feed.history()
-        except Exception: return await i.followup.send('GitHub no está disponible ahora. '+REPO_URL,ephemeral=True)
+        except Exception as exc:
+            try: current=manifest_release(await feed.get(MANIFEST_URL))
+            except Exception: return await i.followup.send(feed_error(exc)+' '+REPO_URL,ephemeral=True)
+            e=make('✦ NexusMusic · Versión actual',f'**{current["version"]}**\n> No se pudo cargar el historial completo. Esta es la versión del manifiesto oficial.')
+            return await i.followup.send(embed=e,view=link_view(('Descargar APK',current['url']),('Ver historial',REPO_URL)),**art(e,'versions',i.channel),allowed_mentions=NO_MENTIONS)
         if not items: return await i.followup.send('No se encontraron publicaciones con NexusMusic.apk.',ephemeral=True)
         v=History(items,i.user.id); e=v.render(); await i.followup.send(embed=e,view=v,**art(e,'versions',i.channel),allowed_mentions=NO_MENTIONS)
     @info_group.command(name='nexusmusic',description='Consulta versión, APK y SHA-256 del manifiesto oficial')
     async def info(i:discord.Interaction):
         await i.response.defer(thinking=True); styled(i)
         try: d=await feed.current()
-        except Exception: return await i.followup.send('No se pudo consultar el version.json oficial. Intenta de nuevo.',ephemeral=True)
+        except Exception as exc: return await i.followup.send(feed_error(exc),ephemeral=True)
         e=make('✦ NexusMusic · Información oficial',f'## Tu música, sin límites\n> Información obtenida del manifiesto oficial de la aplicación.',[('Versión actual',f'`{d["version"]}`',True),('Plataforma','Android · APK',True),('SHA-256 publicado',f'`{d["sha256"]}`',False)])
         await i.followup.send(embed=e,view=link_view(('Descargar APK',d['apkUrl']),('Ver manifiesto',f'https://github.com/santhiagocaro05-debug/Nexus-Update/blob/main/version.json')),**art(e,'info',i.channel),allowed_mentions=NO_MENTIONS)
     @bot.tree.command(name='web',description='Portales oficiales de NexusMusic y NexusForgex')
@@ -211,21 +263,21 @@ def setup_updates(bot,build_embed,config_group,client):
                                 d=states[guild.id]
                             if d.get('channel'): channels[guild.id]=True
                             else: channels.pop(guild.id,None)
-                    except Exception: log.warning('No se pudo leer suscripción guild=%s',guild.id)
-                r=await feed.latest() if channels else None
+                    except Exception as exc: log.warning('No se pudo leer suscripción guild=%s: %s',guild.id,storage_error(exc))
+                r=manifest_release(await feed.get(MANIFEST_URL)) if channels else None
                 if r:
                     for guild in list(bot.guilds):
                         if guild.id not in channels: continue
                         try:
                             async with lock:
                                 d=await state(guild.id)
-                                if guild.id in pending or not should_announce(d,r): continue
-                                # Only a new published stable APK; remember after successful send.
-                                if await announce(guild,r,d):
-                                    new=dict(d,last=r['key'],last_published=r['published']); pending[guild.id]=new
+                                if guild.id in pending: continue
+                                action=manifest_action(d,r)
+                                if action=='baseline' or (action=='announce' and await announce(guild,r,d)):
+                                    new=mark_manifest(d,r); pending[guild.id]=new
                                     await save(guild.id,new); pending.pop(guild.id,None)
                         except Exception as exc: log.warning('Aviso APK pendiente guild=%s (%s)',guild.id,type(exc).__name__)
-            except Exception as exc: log.warning('Monitor APK: %s',type(exc).__name__)
+            except Exception as exc: log.warning('Monitor APK: %s',feed_error(exc))
             await asyncio.sleep(300)
     @bot.listen('on_ready')
     async def start():

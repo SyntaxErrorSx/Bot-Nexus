@@ -40,3 +40,34 @@ def releases(data):
 def should_announce(state, release):
     """Do not repeat a release or announce a rollback as a new publication."""
     return bool(state.get('channel') and release and not release.get('pre') and state.get('last')!=release['key'] and (not state.get('last_published') or release['published']>=state['last_published']))
+
+
+def manifest_release(data):
+    """The official updater manifest is the source of truth for current APK."""
+    d=manifest(data)
+    return {'key': d['apkUrl']+':'+d['sha256'], 'version': d['version'],
+            'url': d['apkUrl'], 'published': None, 'size': None, 'pre': False}
+
+
+def manifest_action(state, release):
+    """Baseline existing subscriptions safely; retry explicit initial notices."""
+    if not state.get('channel') or not release:
+        return 'none'
+    if state.get('announce_current'):
+        return 'announce'
+    old=state.get('last_manifest')
+    if not old:
+        return 'baseline'
+    if old==release['key']:
+        return 'none'
+    def numeric(v):
+        v=str(v or '').lstrip('vV')
+        return tuple(map(int,v.split('.'))) if re.fullmatch(r'\d+(?:\.\d+)*',v) else None
+    previous=numeric(state.get('last_version')); current=numeric(release['version'])
+    if previous is not None and current is not None and current<previous:
+        return 'none'
+    return 'announce'
+
+
+def mark_manifest(state, release):
+    return dict(state,last_manifest=release['key'],last_version=release['version'],announce_current=False)
