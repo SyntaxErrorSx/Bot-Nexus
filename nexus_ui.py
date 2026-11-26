@@ -4,11 +4,30 @@ import os
 import re
 import json
 import io
+import contextvars
 import discord
 from discord import app_commands
 
 ASSETS = Path(__file__).resolve().parent / 'assets'
-BRAND = 'NEXUS SYSTEM  •  Nexus Studios'
+BRAND = 'NEXUSMUSIC  •  Nexus Studios'
+STYLE = contextvars.ContextVar('nexusmusic_style', default=(None, None))
+CHANNEL_SCOPE = contextvars.ContextVar('nexusmusic_channel', default=None)
+
+def set_style_context(bot, guild):
+    STYLE.set((bot, guild))
+
+class NexusTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction):
+        set_style_context(interaction.client, interaction.guild)
+        CHANNEL_SCOPE.set(interaction.channel)
+        data=interaction.data or {}
+        name=data.get('name','')
+        opts=data.get('options') or []
+        while opts and opts[0].get('type') in (1,2):
+            name+=' '+opts[0].get('name',''); opts=opts[0].get('options') or []
+        COMMAND_SCOPE.set(name)
+        return True
+
 
 def banner(embed, kind):
     """Return a fresh attachment, or use an optional hosted GIF."""
@@ -22,22 +41,79 @@ def banner(embed, kind):
         return {'file': discord.File(path, filename=path.name)}
     return {}
 
-def animated(bot, name, fallback):
-    from emojis import EMOJIS
-    raw = EMOJIS.get(name, '')
-    match = re.fullmatch(r'<a?:\w+:(\d+)>', raw)
-    if match:
-        emoji = bot.get_emoji(int(match.group(1)))
-        if emoji and emoji.is_usable():
-            return str(emoji)
-    return fallback
+EMOJI_NAMES={
+    'checkmark':('nexus_success','checkmark','check','success','verify'),
+    'olhos70':('nexus_music','music','equalizer','olhos70'),
+    'alert':('nexus_alert','warning','alert'), 'staff':('nexus_staff','staff','shield','ban'),
+    'gift':('nexus_gift','gift','giveaway'), 'web':('nexus_web','web','globe'),
+    'update':('nexus_update','update','download'), 'star':('nexus_star','star','sparkles'),
+    'loading':('nexus_loading','loading','spinner'), 'welcome':('nexus_welcome','welcome'),
+}
 
-def style_embed(embed, bot=None):
-    if not embed.footer.text:
+def animated(bot, name, fallback, guild=None):
+    from emojis import EMOJIS
+    ctx_bot, ctx_guild=STYLE.get(); bot=bot or ctx_bot; guild=guild or ctx_guild
+    if not bot: return fallback
+    names=EMOJI_NAMES.get(name,(name,)); configured=os.getenv('NEXUS_EMOJI_'+name.upper(),'').strip()
+    match=re.fullmatch(r'<a?:\w+:(\d+)>',configured or EMOJIS.get(name,'')); preferred=match.group(1) if match else configured
+    items=[e for e in (getattr(guild,'emojis',()) or ()) if getattr(e,'available',True) and (not hasattr(e,'is_usable') or e.is_usable())]+list(getattr(bot,'nexus_app_emojis',()) or ())
+    valid=[e for e in items if getattr(e,'available',True) and (str(e.id)==preferred or e.name.casefold() in names or (preferred and e.name.casefold()==preferred.casefold()))]
+    valid.sort(key=lambda e:(not e.animated,str(e.id)!=preferred))
+    return str(valid[0]) if valid else fallback
+
+PALETTE={0x7468ff:0xD92138,0x5865f2:0xD92138,0x7270f5:0xD92138,0x87cefa:0x20C997,0xb0c4de:0xD92138,0xa855f7:0xBD3158}
+SYMBOLS={'✅':'checkmark','🎵':'olhos70','🎶':'olhos70','⚠️':'alert','🛡️':'staff','🎁':'gift','🌐':'web','⬇️':'update','✨':'star','⏳':'loading','🎉':'welcome','✦':'star'}
+def style_embed(embed, bot=None, guild=None):
+    if not isinstance(embed,discord.Embed): return embed
+    bot=bot or STYLE.get()[0]
+    if embed.colour and embed.colour.value in PALETTE: embed.colour=PALETTE[embed.colour.value]
+    if not embed.footer.text or embed.footer.text.startswith('NEXUS SYSTEM'):
         embed.set_footer(text=BRAND)
-    if not embed.author.name and bot and bot.user:
-        embed.set_author(name='Nexus System', icon_url=bot.user.display_avatar.url)
+    if not embed.author.name and bot and bot.user and len(embed)<5900:
+        embed.set_author(name='NEXUSMUSIC / STUDIO',icon_url=bot.user.display_avatar.url)
+    # Only replace leading markers. Avoid changing code, links, or user-authored message bodies.
+    def label(value):
+        if not value: return value
+        for symbol,key in SYMBOLS.items():
+            if value.startswith(symbol): return animated(bot,key,symbol,guild)+value[len(symbol):]
+        return value
+    if len(embed)>5800: return embed
+    if embed.title: embed.title=label(embed.title)[:256]
+    for idx,f in enumerate(embed.fields):
+        if f.name and not f.name.startswith('<'):
+            embed.set_field_at(idx,name=label(f.name)[:256],value=f.value,inline=f.inline)
     return embed
+
+COMMAND_ART={
+    **dict.fromkeys(('play','nowplaying','panel-play','queue'),'music'),
+    **dict.fromkeys(('ayuda','nexus comandos'),'help'),
+    **dict.fromkeys(('ban','kick','mute','timeout','warn','softban','modstats','logs','paneladmin','purge'),'staff'),
+    **dict.fromkeys(('antilink','antispam','block-server','panel-verificacion','canal-trampa'),'security'),
+    **dict.fromkeys(('giveaway','encuesta','announce','sugerencia','panel-autoroles'),'community'),
+    **dict.fromkeys(('test-welcome','test-despedida','test-dm-bienvenida'),'welcome'),
+    **dict.fromkeys(('panel-keys','generar-key','ver-keys','actualizar-enlace','legales','legales-free'),'studio'),
+}
+ART_TITLES=(('security',('antispam','antilink','enlace bloqueado','canal trampa','verificación','bloqueado')),('staff',('baneado','expulsado','advertencia','moderación','silenciado','timeout','administración')),('community',('sorteo','encuesta','anuncio','sugerencia')),('welcome',('bienvenido','bienvenida','despedida')),('music',('nexus music','cola de reproducción','panel de música')),('help',('menú de ayuda','centro de comandos')))
+COMMAND_SCOPE=contextvars.ContextVar('nexusmusic_command',default='')
+
+async def send_styled(send,*args,**kwargs):
+    # A single fresh upload on important sends; preserve custom artwork and existing attachments.
+    target=getattr(send,'__self__',None)
+    interaction=getattr(target,'_parent',None)
+    guild=getattr(target,'guild',None) or getattr(interaction,'guild',None) or STYLE.get()[1]
+    channel=getattr(interaction,'channel',None) or (target if hasattr(target,'permissions_for') else None)
+    if channel is None and getattr(target,'type',None)==discord.WebhookType.application: channel=CHANNEL_SCOPE.get()
+    e=kwargs.get('embed')
+    if isinstance(e,discord.Embed):
+        e=e.copy(); kwargs['embed']=e
+        style_embed(e,guild=guild)
+        if not e.image.url and not any(k in kwargs for k in ('file','files','attachments')):
+            kind=COMMAND_ART.get(COMMAND_SCOPE.get())
+            if not kind:
+                title=(e.title or '').casefold(); kind=next((k for k,words in ART_TITLES if any(w in title for w in words)),None)
+            if kind and (not channel or not guild or not guild.me or not hasattr(channel,'permissions_for') or channel.permissions_for(guild.me).attach_files):
+                kwargs.update(banner(e,kind))
+    return await send(*args,**kwargs)
 
 class StudioText(discord.ui.Modal, title='Nexus Studio · Contenido'):
     heading = discord.ui.TextInput(label='Título', max_length=256, required=False)
@@ -57,7 +133,7 @@ class StudioText(discord.ui.Modal, title='Nexus Studio · Contenido'):
         await self.studio.update(interaction, e)
 
 class StudioAppearance(discord.ui.Modal, title='Nexus Studio · Apariencia'):
-    color = discord.ui.TextInput(label='Color HEX', max_length=7, required=False, placeholder='#7468FF')
+    color = discord.ui.TextInput(label='Color HEX', max_length=7, required=False, placeholder='#D92138')
     image = discord.ui.TextInput(label='Banner o imagen (URL HTTPS)', required=False, max_length=1000)
     thumb = discord.ui.TextInput(label='Miniatura (URL HTTPS)', required=False, max_length=1000)
     def __init__(self, studio):
@@ -67,7 +143,7 @@ class StudioAppearance(discord.ui.Modal, title='Nexus Studio · Apariencia'):
     async def on_submit(self, interaction):
         e = self.studio.draft.copy(); color = str(self.color).strip().lstrip('#')
         if color and not re.fullmatch(r'[0-9a-fA-F]{6}', color):
-            return await interaction.response.send_message('Color inválido. Ejemplo: `#7468FF`.', ephemeral=True)
+            return await interaction.response.send_message('Color inválido. Ejemplo: `#D92138`.', ephemeral=True)
         for value in (str(self.image), str(self.thumb)):
             if value and not value.startswith('https://'):
                 return await interaction.response.send_message('Las imágenes deben usar una URL HTTPS.', ephemeral=True)
@@ -91,7 +167,7 @@ class StudioField(discord.ui.Modal, title='Nexus Studio · Nuevo campo'):
 class StudioView(discord.ui.View):
     def __init__(self, user_id, channel):
         super().__init__(timeout=900); self.user_id = user_id; self.channel = channel; self.published = False
-        self.draft = discord.Embed(title='✦ Nuevo anuncio', description='## Tu mensaje empieza aquí\n> Edita el contenido con los botones.\n\n**Negritas**, *cursivas*, `código` y listas.', colour=0x7468FF)
+        self.draft = discord.Embed(title='✦ Nuevo anuncio', description='## Tu mensaje empieza aquí\n> Edita el contenido con los botones.\n\n**Negritas**, *cursivas*, `código` y listas.', colour=0xD92138)
         self.draft.set_footer(text=BRAND)
     async def interaction_check(self, interaction):
         if interaction.user.id != self.user_id or not interaction.user.guild_permissions.manage_messages:
@@ -159,7 +235,7 @@ def setup_ui(bot, build_embed, get_state, nexus_group):
     @nexus_group.command(name='invitar', description='Obtén el enlace oficial para añadir Nexus a otro servidor.')
     async def invite(interaction: discord.Interaction):
         url = discord.utils.oauth_url(bot.user.id, permissions=discord.Permissions(send_messages=True, embed_links=True, attach_files=True, read_message_history=True, connect=True, speak=True), scopes=('bot','applications.commands'))
-        e = build_embed(title='✦ Añade Nexus a tu servidor', description='## Tu comunidad, mejor conectada\n> Música, herramientas y moderación en un solo lugar.\n\nLos módulos de administración pueden requerir permisos adicionales.', color=0x7468FF)
+        e = build_embed(title='✦ Añade Nexus a tu servidor', description='## Tu comunidad, mejor conectada\n> Música, herramientas y moderación en un solo lugar.\n\nLos módulos de administración pueden requerir permisos adicionales.', color=0xD92138)
         v = discord.ui.View(); v.add_item(discord.ui.Button(label='Añadir a Discord', url=url))
         await interaction.response.send_message(embed=e, view=v, ephemeral=True, **banner(e,'welcome'))
 
@@ -167,7 +243,7 @@ def setup_ui(bot, build_embed, get_state, nexus_group):
     async def music_status(interaction: discord.Interaction):
         if not interaction.guild: return await interaction.response.send_message('Usa este comando en un servidor.', ephemeral=True)
         s = get_state(interaction.guild_id); vc = s.voice_client
-        e = build_embed(title='✦ Diagnóstico musical', description='> Estado actual de este servidor.', fields=[('Conexión', 'Activa' if vc and vc.is_connected() else 'Desconectada', True),('Cola', str(len(s.queue)),True),('Reproductor','Pausa' if s.is_paused else 'Activo' if s.is_playing() else 'Inactivo',True),('Latencia Gateway', f'{bot.latency*1000:.0f} ms',True)], color=0x7468FF)
+        e = build_embed(title='✦ Diagnóstico musical', description='> Estado actual de este servidor.', fields=[('Conexión', 'Activa' if vc and vc.is_connected() else 'Desconectada', True),('Cola', str(len(s.queue)),True),('Reproductor','Pausa' if s.is_paused else 'Activo' if s.is_playing() else 'Inactivo',True),('Latencia Gateway', f'{bot.latency*1000:.0f} ms',True)], color=0xD92138)
         await interaction.response.send_message(embed=e, ephemeral=True)
 
     @nexus_group.command(name='cola-limpiar', description='Elimina las canciones pendientes sin detener la actual.')
@@ -189,10 +265,11 @@ def setup_ui(bot, build_embed, get_state, nexus_group):
     @bot.listen('on_guild_join')
     async def owner_welcome(guild):
         if os.getenv('NEXUS_OWNER_WELCOME', '1') == '0': return
+        set_style_context(bot,guild)
         owner = guild.owner
         try:
             if owner is None: owner = await bot.fetch_user(guild.owner_id)
-            e = build_embed(title='✦ Bienvenido a Nexus System', description=f'## Gracias por añadir Nexus\n> Ya formo parte de **{discord.utils.escape_markdown(guild.name)}**.\n\n**Primeros pasos**\n`/ayuda` Explora los módulos\n`/paneladmin` Configura tu comunidad\n`/embed` Crea anuncios personalizados\n`/play` Reproduce música', fields=[('Servidor', str(guild.id),True),('Miembros',str(guild.member_count or '—'),True)], color=0x7468FF, thumbnail=guild.icon.url if guild.icon else None)
+            e = build_embed(title='✦ Bienvenido a NexusMusic', description=f'## Gracias por añadir Nexus\n> Ya formo parte de **{discord.utils.escape_markdown(guild.name)}**.\n\n**Primeros pasos**\n`/ayuda` Explora los módulos\n`/paneladmin` Configura tu comunidad\n`/embed` Crea anuncios personalizados\n`/play` Reproduce música\n`/config canal-ac` Activa avisos APK\n`/nexusmusic version` Descargas oficiales\n`/web` Portales oficiales', fields=[('Servidor', str(guild.id),True),('Miembros',str(guild.member_count or '—'),True)], color=0xD92138, thumbnail=guild.icon.url if guild.icon else None)
             await owner.send(embed=e, **banner(e,'welcome'))
         except (discord.Forbidden, discord.NotFound, discord.HTTPException) as exc:
             print(f'Owner DM no disponible en {guild.id}: {type(exc).__name__}')

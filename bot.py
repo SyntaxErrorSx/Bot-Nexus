@@ -14,7 +14,7 @@ from discord.ext import commands
 from flask import Flask
 from dotenv import load_dotenv
 from config import Config
-from nexus_ui import banner, animated, style_embed, setup_ui
+from nexus_ui import banner, animated, style_embed, setup_ui, NexusTree, set_style_context, send_styled
 import firebase_admin
 from firebase_admin import credentials, firestore
 import asyncio
@@ -111,9 +111,11 @@ intents.message_content = True
 intents.members = True
 intents.guilds = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, tree_cls=NexusTree)
 nexus_group = app_commands.Group(name="nexus", description="Herramientas y utilidades de Nexus System.")
 bot.tree.add_command(nexus_group)
+config_group = app_commands.Group(name="config", description="Configuración del servidor y actualizaciones", guild_only=True)
+bot.tree.add_command(config_group)
 BOT_START_TIME = time.time()
 
 # ──────────────────────────────────────────────────────────────
@@ -968,13 +970,13 @@ async def apply_verification(member: discord.Member, cfg: dict) -> bool:
 #  COLORES / HELPERS
 # ──────────────────────────────────────────────────────────────
 
-COLOR_MAIN = discord.Color.from_rgb(116, 104, 255)
+COLOR_MAIN = discord.Color.from_rgb(217, 33, 56)
 COLOR_OK = discord.Color.from_rgb(45, 212, 191)
 COLOR_WARN = discord.Color.from_rgb(251, 113, 133)
 COLOR_AMBER = discord.Color.from_rgb(255, 176, 71)
 COLOR_PURPLE = discord.Color.from_rgb(168, 85, 247)
 
-BOT_FOOTER_TEXT = "NEXUS SYSTEM  •  Nexus Studios"
+BOT_FOOTER_TEXT = "NEXUSMUSIC  •  Nexus Studios"
 
 
 def nexus_embed(*args, **kwargs):
@@ -1056,7 +1058,7 @@ async def block_if_not_nexus_pro_guild(interaction: discord.Interaction) -> bool
             ),
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return True
     return False
 
@@ -1205,7 +1207,7 @@ class AppealView(discord.ui.View):
         
         try:
             # Enviar al owner
-            await owner.send(embed=embed, view=view)
+            await send_styled(owner.send, embed=embed, view=view)
             await interaction.response.send_message(
                 "✅ Se ha enviado tu apelación al owner. Recibirás respuesta pronto.",
                 ephemeral=True
@@ -1313,7 +1315,7 @@ class AppealView(discord.ui.View):
                     )
                     
                     # Enviar respuesta al usuario
-                    await user.send(embed=embed_respuesta)
+                    await send_styled(user.send, embed=embed_respuesta)
                     
                     # Deshabilitar el botón
                     for child in interaction_modal.message.view.children:
@@ -1394,7 +1396,7 @@ class TerminosView(discord.ui.View):
                 thumbnail=interaction.user.display_avatar.url,
                 footer=f"ID del usuario: {interaction.user.id}",
             )
-            await log_channel.send(embed=log_embed)
+            await send_styled(log_channel.send, embed=log_embed)
 
         embed = build_embed(
             title="📥 Instalador de Nexus Pro (Beta)",
@@ -1409,7 +1411,7 @@ class TerminosView(discord.ui.View):
             fields=[("🔗 Enlace de descarga", link, False)],
             footer="Nexus Pro · Beta",
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
     @discord.ui.button(label="No, no acepto", style=discord.ButtonStyle.danger, emoji="❌")
     async def rechazar(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1433,7 +1435,7 @@ class TerminosView(discord.ui.View):
                 thumbnail=interaction.user.display_avatar.url,
                 footer=f"ID del usuario: {interaction.user.id}",
             )
-            await log_channel.send(embed=log_embed)
+            await send_styled(log_channel.send, embed=log_embed)
 
 
 class Paginator(discord.ui.View):
@@ -1557,10 +1559,10 @@ HELP_CATEGORIES = {
         "description": "Comandos que requieren permisos de Administrador.",
         "commands": [
             ("/actualizar-enlace", "Actualiza el enlace del instalador y avisa a Insiders/VIP."),
-            ("/config-logs", "Configura los canales de log del servidor."),
+            ("/config logs", "Configura los canales de log del servidor."),
             ("/config-rol-enlace", "Agrega o quita roles autorizados para /enlace."),
-            ("/config-welcome", "Configura el sistema de bienvenidas."),
-            ("/config-despedida", "Configura el sistema de despedidas."),
+            ("/config welcome", "Configura el sistema de bienvenidas."),
+            ("/config despedida", "Configura el sistema de despedidas."),
             ("/test-welcome", "Previsualiza el mensaje de bienvenida."),
             ("/test-despedida", "Previsualiza el mensaje de despedida."),
             ("/say", "Hace que el bot envíe un mensaje."),
@@ -1983,7 +1985,7 @@ class MusicPanelView(discord.ui.View):
             and member.voice.channel == state.voice_client.channel
         )
         if not en_canal:
-            await interaction.response.send_message(
+            await send_styled(interaction.response.send_message, 
                 embed=build_embed(
                     title="🔇 Tenés que estar en el mismo canal de voz",
                     description="Unite al canal donde está sonando la música para usar los controles.",
@@ -2000,7 +2002,7 @@ class MusicPanelView(discord.ui.View):
             return
         state = get_music_state(self.guild_id)
         if not state.voice_client or not state.current:
-            return await interaction.response.send_message(
+            return await send_styled(interaction.response.send_message, 
                 embed=build_embed(title="❌ No hay nada reproduciéndose", color=COLOR_WARN), ephemeral=True
             )
         if state.is_paused:
@@ -2019,13 +2021,13 @@ class MusicPanelView(discord.ui.View):
             return
         state = get_music_state(self.guild_id)
         if not state.is_playing() or not state.current:
-            return await interaction.response.send_message(
+            return await send_styled(interaction.response.send_message, 
                 embed=build_embed(title="❌ No hay canción reproduciéndose", color=COLOR_WARN), ephemeral=True
             )
         record_log(self.guild_id, "musica", f"{interaction.user} saltó la canción (panel): {state.current.title}", str(interaction.user))
         state.force_skip_loop = True
         state.voice_client.stop()
-        await interaction.response.send_message(embed=build_embed(title="⏭️ Canción saltada", color=COLOR_AMBER), ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=build_embed(title="⏭️ Canción saltada", color=COLOR_AMBER), ephemeral=True)
 
     @discord.ui.button(emoji="⏹️", style=discord.ButtonStyle.danger, row=0)
     async def stop_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2033,7 +2035,7 @@ class MusicPanelView(discord.ui.View):
             return
         state = get_music_state(self.guild_id)
         if not state.voice_client:
-            return await interaction.response.send_message(
+            return await send_styled(interaction.response.send_message, 
                 embed=build_embed(title="❌ No hay música reproduciéndose", color=COLOR_WARN), ephemeral=True
             )
         if state.is_playing():
@@ -2083,7 +2085,7 @@ class MusicPanelView(discord.ui.View):
             return
         state = get_music_state(self.guild_id)
         if not state.voice_client:
-            return await interaction.response.send_message(
+            return await send_styled(interaction.response.send_message, 
                 embed=build_embed(title="❌ No hay música reproduciéndose", color=COLOR_WARN), ephemeral=True
             )
         state.volume = max(0.0, round(state.volume - 0.1, 2))
@@ -2100,7 +2102,7 @@ class MusicPanelView(discord.ui.View):
             return
         state = get_music_state(self.guild_id)
         if not state.voice_client:
-            return await interaction.response.send_message(
+            return await send_styled(interaction.response.send_message, 
                 embed=build_embed(title="❌ No hay música reproduciéndose", color=COLOR_WARN), ephemeral=True
             )
         state.volume = min(1.0, round(state.volume + 0.1, 2))
@@ -2272,7 +2274,7 @@ async def _play_next_locked(guild_id: int) -> None:
         if data is None:
             if state.text_channel:
                 try:
-                    await state.text_channel.send(embed=build_embed(
+                    await send_styled(state.text_channel.send, embed=build_embed(
                         title="⚠️ No se pudo reproducir una canción",
                         description=(
                             f"Se saltó **{next_song.title}** por un error al obtener el audio.\n"
@@ -2324,7 +2326,7 @@ async def _play_next_locked(guild_id: int) -> None:
     if state.text_channel:
         try:
             e = build_now_playing_embed(state)
-            await state.text_channel.send(embed=e, view=MusicPanelView(guild_id), **banner(e, 'music'))
+            await send_styled(state.text_channel.send, embed=e, view=MusicPanelView(guild_id), **banner(e, 'music'))
         except Exception:
             pass
 
@@ -2338,9 +2340,9 @@ async def ensure_voice(interaction: discord.Interaction) -> discord.VoiceClient 
             color=COLOR_WARN,
         )
         if interaction.response.is_done():
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         else:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return None
 
     channel = interaction.user.voice.channel
@@ -2357,13 +2359,13 @@ async def ensure_voice(interaction: discord.Interaction) -> discord.VoiceClient 
                     color=COLOR_WARN,
                 )
                 if interaction.response.is_done():
-                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
                 else:
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
+                    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
                 return None
         elif interaction.guild.voice_client.channel != channel:
             if state.is_playing() or state.queue:
-                await interaction.followup.send(embed=build_embed(title="🔒 Sesión musical activa", description="Únete al canal donde está el bot."), ephemeral=True)
+                await send_styled(interaction.followup.send, embed=build_embed(title="🔒 Sesión musical activa", description="Únete al canal donde está el bot."), ephemeral=True)
                 return None
             await interaction.guild.voice_client.move_to(channel)
             state.voice_client = interaction.guild.voice_client
@@ -2428,6 +2430,10 @@ async def on_ready():
         return
     bot._nexus_ready_initialized = True
     try:
+        bot.nexus_app_emojis = await bot.fetch_application_emojis()
+    except (discord.HTTPException, AttributeError):
+        bot.nexus_app_emojis = []
+    try:
         if GUILD_ID:
             guild_obj = discord.Object(id=int(GUILD_ID))
             bot.tree.copy_global_to(guild=guild_obj)
@@ -2488,7 +2494,7 @@ async def on_ready():
         await bot.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name=f"Nexus System · /ayuda | {len(bot.guilds)} servidores"
+                name=f"NexusMusic · /ayuda | {len(bot.guilds)} servidores"
             )
         )
     except Exception as e:
@@ -2567,7 +2573,7 @@ async def play(interaction: discord.Interaction, query: str):
             description="El servidor donde corre el bot no tiene `ffmpeg` instalado. Sin FFmpeg la música no puede reproducirse. Avisale al owner del hosting para que lo instale.",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
 
     if not DAVEY_AVAILABLE:
@@ -2576,7 +2582,7 @@ async def play(interaction: discord.Interaction, query: str):
             description="Discord ahora exige el protocolo de cifrado de voz DAVE, que requiere la librería `davey`. Agregá `davey>=0.1.4` a `requirements.txt`, reinstalá dependencias y reiniciá el bot.",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     # Verificar que el usuario está en un canal de voz
@@ -2586,7 +2592,7 @@ async def play(interaction: discord.Interaction, query: str):
             description="Únete a un canal de voz primero.",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     # ⚡ Conectar al canal de voz y buscar la canción son dos cosas independientes
@@ -2618,7 +2624,7 @@ async def play(interaction: discord.Interaction, query: str):
             ),
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
 
     if len(state.queue) >= 100:
@@ -2636,7 +2642,7 @@ async def play(interaction: discord.Interaction, query: str):
     # Arrancar sin esperar el envío HTTP de la confirmación.
     if not state.is_playing():
         asyncio.create_task(start_playback(interaction.guild_id))
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="skip", description="⏭️ Salta la canción actual.")
@@ -2658,7 +2664,7 @@ async def skip(interaction: discord.Interaction):
             title="❌ No hay canción reproduciéndose",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     song_title = state.current.title
@@ -2678,7 +2684,7 @@ async def skip(interaction: discord.Interaction):
         description=f"Saltando: **{song_title}**",
         color=COLOR_AMBER,
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 @bot.tree.command(name="pause", description="⏸️ Pausa la canción actual.")
 @app_commands.guild_only()
@@ -2699,7 +2705,7 @@ async def pause(interaction: discord.Interaction):
             title="❌ No hay canción reproduciéndose",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     if state.is_paused:
@@ -2707,7 +2713,7 @@ async def pause(interaction: discord.Interaction):
             title="⏸️ Ya está pausado",
             color=COLOR_AMBER,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     state.pause_audio()
@@ -2717,7 +2723,7 @@ async def pause(interaction: discord.Interaction):
         description=f"Pausado: **{state.current.title}**",
         color=COLOR_AMBER,
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 
 @bot.tree.command(name="resume", description="▶️ Reanuda la canción pausada.")
@@ -2739,7 +2745,7 @@ async def resume(interaction: discord.Interaction):
             title="❌ No hay canción reproduciéndose",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     if not state.is_paused:
@@ -2747,7 +2753,7 @@ async def resume(interaction: discord.Interaction):
             title="▶️ La canción ya se está reproduciendo",
             color=COLOR_AMBER,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     state.resume_audio()
@@ -2757,7 +2763,7 @@ async def resume(interaction: discord.Interaction):
         description=f"Reanudado: **{state.current.title}**",
         color=COLOR_OK,
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 
 @bot.tree.command(name="stop", description="⏹️ Detiene la música y limpia la cola.")
@@ -2779,7 +2785,7 @@ async def stop(interaction: discord.Interaction):
             title="❌ No hay música reproduciéndose",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     # Detener y limpiar
@@ -2806,7 +2812,7 @@ async def stop(interaction: discord.Interaction):
         description="La cola ha sido limpiada y el bot se ha desconectado.",
         color=COLOR_WARN,
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 
 @bot.tree.command(name="queue", description="📋 Muestra la cola de canciones.")
@@ -2824,9 +2830,9 @@ async def queue_cmd(interaction: discord.Interaction):
     
     if len(pages) > 1:
         view = Paginator(pages, autor_id=interaction.user.id)
-        await interaction.followup.send(embed=pages[0], view=view, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=pages[0], view=view, ephemeral=True)
     else:
-        await interaction.followup.send(embed=pages[0], ephemeral=True)
+        await send_styled(interaction.followup.send, embed=pages[0], ephemeral=True)
 
 
 @bot.tree.command(name="nowplaying", description="🎵 Muestra la canción que se está reproduciendo.")
@@ -2846,11 +2852,11 @@ async def nowplaying(interaction: discord.Interaction):
             title="🎵 No hay canción reproduciéndose",
             color=COLOR_AMBER,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     embed = build_now_playing_embed(state)
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="panel-play", description="🎶 Muestra el panel de música con botones (play/pausa, skip, stop, loop).")
@@ -2865,9 +2871,9 @@ async def panel_play_cmd(interaction: discord.Interaction):
     embed = build_now_playing_embed(state)
 
     if state.current:
-        await interaction.followup.send(embed=embed, view=MusicPanelView(interaction.guild_id), **banner(embed, "music"))
+        await send_styled(interaction.followup.send, embed=embed, view=MusicPanelView(interaction.guild_id), **banner(embed, "music"))
     else:
-        await interaction.followup.send(embed=embed)
+        await send_styled(interaction.followup.send, embed=embed)
 
 
 @bot.tree.command(name="volume", description="🔊 Ajusta el volumen de la música.")
@@ -2887,7 +2893,7 @@ async def volume(interaction: discord.Interaction, volumen: int):
             description="El volumen debe estar entre 0 y 100.",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     state = get_music_state(interaction.guild_id)
@@ -2899,7 +2905,7 @@ async def volume(interaction: discord.Interaction, volumen: int):
             title="❌ No hay música reproduciéndose",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     state.volume = volumen / 100
@@ -2911,7 +2917,7 @@ async def volume(interaction: discord.Interaction, volumen: int):
         description=f"Volumen: **{volumen}%**",
         color=COLOR_OK,
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 @bot.tree.command(name="loop", description="🔄 Activa el modo de repetición.")
 @app_commands.guild_only()
@@ -2944,7 +2950,7 @@ async def loop(interaction: discord.Interaction, modo: app_commands.Choice[str])
         title=textos.get(modo.value, "🔄 Modo loop"),
         color=COLOR_OK,
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 @bot.tree.command(name="shuffle", description="🔀 Mezcla aleatoriamente la cola.")
 @app_commands.guild_only()
@@ -2966,7 +2972,7 @@ async def shuffle(interaction: discord.Interaction):
             description="Necesitas al menos 2 canciones en la cola.",
             color=COLOR_AMBER,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     random.shuffle(state.queue)
@@ -2976,7 +2982,7 @@ async def shuffle(interaction: discord.Interaction):
         description=f"Se mezclaron {len(state.queue)} canciones aleatoriamente.",
         color=COLOR_OK,
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 
 @bot.tree.command(name="remove", description="🗑️ Elimina una canción de la cola.")
@@ -3000,7 +3006,7 @@ async def remove(interaction: discord.Interaction, posicion: int):
             description=f"La cola tiene {len(state.queue)} canciones. Usa un número entre 1 y {len(state.queue)}.",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     removed = state.queue.pop(posicion - 1)
@@ -3010,7 +3016,7 @@ async def remove(interaction: discord.Interaction, posicion: int):
         description=f"Se eliminó: **{removed.title}**",
         color=COLOR_OK,
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 @bot.tree.command(name="quedate", description="📌 El bot se queda en el canal de voz sin desconectarse solo, hasta que uses /leavebot.")
 @app_commands.guild_only()
@@ -3028,7 +3034,7 @@ async def quedate_cmd(interaction: discord.Interaction):
             description="Únete a un canal de voz primero.",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
 
     voice_client = await ensure_voice(interaction)
@@ -3046,7 +3052,7 @@ async def quedate_cmd(interaction: discord.Interaction):
         ),
         color=COLOR_OK,
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 
 @bot.tree.command(name="leavebot", description="👋 Saca al bot del canal de voz (cancela el modo /quedate).")
@@ -3068,7 +3074,7 @@ async def leavebot_cmd(interaction: discord.Interaction):
             title="❌ El bot no está en un canal de voz",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
 
     # Detener y limpiar
@@ -3097,7 +3103,7 @@ async def leavebot_cmd(interaction: discord.Interaction):
         description="La cola se limpió y el modo `/quedate` se desactivó.",
         color=COLOR_WARN,
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 
 @bot.tree.command(name="disconnect", description="🔌 Desconecta al bot del canal de voz.")
@@ -3119,7 +3125,7 @@ async def disconnect(interaction: discord.Interaction):
             title="❌ El bot no está en un canal de voz",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         return
     
     # Detener y limpiar
@@ -3145,11 +3151,12 @@ async def disconnect(interaction: discord.Interaction):
         description="El bot ha sido desconectado del canal de voz.",
         color=COLOR_OK,
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 
 @bot.event
 async def on_member_join(member: discord.Member):
+    set_style_context(bot,member.guild)
     cfg = get_guild_config(member.guild.id)
     bump_stat(member.guild.id, "joins")
     record_log(member.guild.id, "bienvenidas", f"{member} se unió al servidor.", str(member))
@@ -3185,7 +3192,7 @@ async def on_member_join(member: discord.Member):
                 image=cfg.get("dm_welcome_banner"),
                 footer="Equipo de Nexus Studios",
             )
-            await member.send(embed=dm_embed)
+            await send_styled(member.send, embed=dm_embed)
         except discord.Forbidden:
             # El usuario tiene los DMs cerrados para este servidor; no debe
             # interrumpir el resto del flujo de bienvenida.
@@ -3211,11 +3218,12 @@ async def on_member_join(member: discord.Member):
         image=cfg.get("welcome_banner"),
         footer=f"Miembro #{member.guild.member_count}",
     )
-    await channel.send(embed=embed)
+    await send_styled(channel.send, embed=embed)
 
 
 @bot.event
 async def on_member_remove(member: discord.Member):
+    set_style_context(bot,member.guild)
     cfg = get_guild_config(member.guild.id)
     bump_stat(member.guild.id, "leaves")
     record_log(member.guild.id, "bienvenidas", f"{member} abandonó el servidor.", str(member))
@@ -3237,7 +3245,7 @@ async def on_member_remove(member: discord.Member):
         thumbnail=member.display_avatar.url,
         image=cfg.get("farewell_banner"),
     )
-    await channel.send(embed=embed)
+    await send_styled(channel.send, embed=embed)
 
 
 @bot.event
@@ -3266,7 +3274,7 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
         thumbnail=before.author.display_avatar.url,
         footer=f"ID del usuario: {before.author.id}",
     )
-    await channel.send(embed=embed)
+    await send_styled(channel.send, embed=embed)
 
 
 @bot.event
@@ -3296,7 +3304,7 @@ async def on_message_delete(message: discord.Message):
         thumbnail=message.author.display_avatar.url,
         footer=f"ID del usuario: {message.author.id}",
     )
-    await channel.send(embed=embed)
+    await send_styled(channel.send, embed=embed)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -3308,7 +3316,7 @@ async def on_message_delete(message: discord.Message):
 async def legales(interaction: discord.Interaction):
     if await block_if_not_nexus_pro_guild(interaction):
         return
-    track_command(interaction.guild_id, "legales")
+    schedule_music_log(track_command, interaction.guild_id, "legales")
     
     # ✅ VERIFICAR ROLES
     if not isinstance(interaction.user, discord.Member):
@@ -3332,7 +3340,7 @@ async def legales(interaction: discord.Interaction):
             ),
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     # Si tiene permisos, mostrar términos
@@ -3343,14 +3351,14 @@ async def legales(interaction: discord.Interaction):
         footer="Nexus Pro · Debes aceptar para continuar",
     )
     view = TerminosView(autor_id=interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="legales-free", description="📜 Muestra los Términos y Condiciones de Nexus Core (Versión Gratuita).")
 @app_commands.checks.cooldown(1, 10.0)
 async def legales_free(interaction: discord.Interaction):
     if await block_if_not_nexus_pro_guild(interaction):
         return
-    track_command(interaction.guild_id, "legales-free")
+    schedule_music_log(track_command, interaction.guild_id, "legales-free")
     
     embed = build_embed(
         title="📜 Términos y Condiciones – Nexus Core (Versión Gratuita)",
@@ -3420,14 +3428,14 @@ async def legales_free(interaction: discord.Interaction):
         if hasattr(item, 'custom_id') and item.custom_id == "descargar_nexus_core":
             item.callback = descargar_core
     
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="enlace", description="Muestra el enlace vigente del instalador de Pro.")
 @app_commands.checks.cooldown(1, 10.0)
 async def enlace(interaction: discord.Interaction):
     if await block_if_not_nexus_pro_guild(interaction):
         return
-    track_command(interaction.guild_id, "enlace")
+    schedule_music_log(track_command, interaction.guild_id, "enlace")
 
     if not isinstance(interaction.user, discord.Member):
         await interaction.response.send_message("Este comando solo funciona en el servidor.", ephemeral=True)
@@ -3448,7 +3456,7 @@ async def enlace(interaction: discord.Interaction):
             ),
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
 
     cfg = get_guild_config(interaction.guild_id)
@@ -3460,7 +3468,7 @@ async def enlace(interaction: discord.Interaction):
             description="Aún no hay un enlace configurado. Contacta a un administrador.",
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
 
     embed = build_embed(
@@ -3473,7 +3481,7 @@ async def enlace(interaction: discord.Interaction):
         fields=[("🔗 Enlace de descarga", link, False)],
         footer="Nexus Pro · Beta",
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="verificar-rol", description="[Admin] Verifica los roles y permisos de un usuario.")
@@ -3556,7 +3564,7 @@ async def verificar_rol(interaction: discord.Interaction, usuario: discord.Membe
     
     embed.set_footer(text="Nexus System · Verificación de roles")
     
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -3577,14 +3585,14 @@ async def mute(
     duracion: str | None = None,
     razon: str = "No especificada"
 ):
-    track_command(interaction.guild_id, "mute")
+    schedule_music_log(track_command, interaction.guild_id, "mute")
     
     if usuario.id == interaction.user.id:
         embed = build_embed(
             title="❌ No te puedes mutear a ti mismo",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     if not interaction.guild.me.guild_permissions.moderate_members:
@@ -3593,7 +3601,7 @@ async def mute(
             description="Necesita el permiso `Moderar Miembros`.",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     if usuario.top_role >= interaction.guild.me.top_role:
@@ -3602,7 +3610,7 @@ async def mute(
             description="Su rol es igual o superior al mío.",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     if is_user_muted(interaction.guild_id, usuario.id):
@@ -3611,7 +3619,7 @@ async def mute(
             description=f"Razón actual: {get_mute_reason(interaction.guild_id, usuario.id)}",
             color=COLOR_AMBER
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     duration_text = "Permanente"
@@ -3627,7 +3635,7 @@ async def mute(
                 description="Usa: `5m`, `2h`, `1d`, `1w`, `1M`",
                 color=COLOR_WARN
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         unit_names = {
@@ -3691,7 +3699,7 @@ async def mute(
         dm_embed.set_footer(text="Nexus Moderation System")
         
         view = AppealView(interaction.guild_id, usuario.id, "mute")
-        await usuario.send(embed=dm_embed, view=view)
+        await send_styled(usuario.send, embed=dm_embed, view=view)
     except:
         pass
     
@@ -3705,21 +3713,21 @@ async def mute(
             ("👤 Moderador", interaction.user.mention, True)
         ]
     )
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 
 @bot.tree.command(name="unmute", description="[Mod] Desmutea a un usuario.")
 @app_commands.describe(usuario="Usuario a desmutear")
 @app_commands.checks.has_permissions(moderate_members=True)
 async def unmute(interaction: discord.Interaction, usuario: discord.Member):
-    track_command(interaction.guild_id, "unmute")
+    schedule_music_log(track_command, interaction.guild_id, "unmute")
     
     if usuario.timed_out_until is None and not is_user_muted(interaction.guild_id, usuario.id):
         embed = build_embed(
             title="ℹ️ El usuario no está muteado",
             color=COLOR_AMBER
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     try:
@@ -3744,7 +3752,7 @@ async def unmute(interaction: discord.Interaction, usuario: discord.Member):
             timestamp=datetime.now(timezone.utc)
         )
         dm_embed.add_field(name="👤 Moderador", value=str(interaction.user), inline=True)
-        await usuario.send(embed=dm_embed)
+        await send_styled(usuario.send, embed=dm_embed)
     except:
         pass
     
@@ -3753,7 +3761,7 @@ async def unmute(interaction: discord.Interaction, usuario: discord.Member):
         description=f"**{usuario}** ha sido desmuteado.",
         color=COLOR_OK
     )
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 
 @bot.tree.command(name="kick", description="[Mod] Expulsa a un usuario con DM y botón de apelación.")
@@ -3764,14 +3772,14 @@ async def unmute(interaction: discord.Interaction, usuario: discord.Member):
 @app_commands.checks.has_permissions(kick_members=True)
 @app_commands.checks.cooldown(1, 5.0)
 async def kick(interaction: discord.Interaction, usuario: discord.Member, razon: str = "No especificada"):
-    track_command(interaction.guild_id, "kick")
+    schedule_music_log(track_command, interaction.guild_id, "kick")
     
     if usuario.id == interaction.user.id:
         embed = build_embed(
             title="❌ No te puedes expulsar a ti mismo",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     if usuario.top_role >= interaction.guild.me.top_role:
@@ -3780,7 +3788,7 @@ async def kick(interaction: discord.Interaction, usuario: discord.Member, razon:
             description="Su rol es igual o superior al mío.",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     try:
@@ -3800,7 +3808,7 @@ async def kick(interaction: discord.Interaction, usuario: discord.Member, razon:
         dm_embed.set_footer(text="Nexus Moderation System")
         
         view = AppealView(interaction.guild_id, usuario.id, "kick")
-        await usuario.send(embed=dm_embed, view=view)
+        await send_styled(usuario.send, embed=dm_embed, view=view)
     except:
         pass
     
@@ -3824,7 +3832,7 @@ async def kick(interaction: discord.Interaction, usuario: discord.Member, razon:
             ("👤 Moderador", interaction.user.mention, True)
         ]
     )
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 
 @bot.tree.command(name="ban", description="[Mod] Banea a un usuario con duración personalizada.")
@@ -3852,14 +3860,14 @@ async def ban(
     # FIX: el parámetro ya no se llama "ban_ip" (chocaba con la función global
     # ban_ip(), lo que provocaba "TypeError: 'Choice' object is not callable"
     # al elegir "Sí, banear IP"). Ahora se llama "ban_ip_choice".
-    track_command(interaction.guild_id, "ban")
+    schedule_music_log(track_command, interaction.guild_id, "ban")
     
     if usuario.id == interaction.user.id:
         embed = build_embed(
             title="❌ No te puedes banear a ti mismo",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     if usuario.top_role >= interaction.guild.me.top_role:
@@ -3868,7 +3876,7 @@ async def ban(
             description="Su rol es igual o superior al mío.",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     duration_text = "Permanente"
@@ -3884,7 +3892,7 @@ async def ban(
                 description="Usa: `5m`, `2h`, `1d`, `1w`, `1M`, `1y`",
                 color=COLOR_WARN
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         unit_names = {
@@ -3917,7 +3925,7 @@ async def ban(
         dm_embed.set_footer(text="Nexus Moderation System")
         
         view = AppealView(interaction.guild_id, usuario.id, "ban")
-        await usuario.send(embed=dm_embed, view=view)
+        await send_styled(usuario.send, embed=dm_embed, view=view)
     except:
         pass
     
@@ -3950,7 +3958,7 @@ async def ban(
             ("👤 Moderador", interaction.user.mention, True)
         ]
     )
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 
 @bot.tree.command(name="unban", description="[Mod] Desbanea a un usuario.")
@@ -3970,7 +3978,7 @@ async def unban(
     usuario_id: str,
     desbanear_ip: app_commands.Choice[str] | None = None
 ):
-    track_command(interaction.guild_id, "unban")
+    schedule_music_log(track_command, interaction.guild_id, "unban")
     
     try:
         user_id = int(usuario_id)
@@ -3980,7 +3988,7 @@ async def unban(
             description="Debes proporcionar un ID de usuario válido.",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     try:
@@ -4009,7 +4017,7 @@ async def unban(
                 ("👤 Moderador", interaction.user.mention, True)
             ]
         )
-        await interaction.response.send_message(embed=embed)
+        await send_styled(interaction.response.send_message, embed=embed)
         
     except discord.NotFound:
         embed = build_embed(
@@ -4017,14 +4025,14 @@ async def unban(
             description=f"No se encontró un usuario baneado con ID `{usuario_id}`.",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
     except Exception as e:
         embed = build_embed(
             title="❌ Error al desbanear",
             description=f"No se pudo desbanear al usuario: {e}",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="ban-ip", description="[Mod] Banea una IP (simulado).")
@@ -4034,14 +4042,14 @@ async def unban(
 )
 @app_commands.checks.has_permissions(ban_members=True)
 async def ban_ip_cmd(interaction: discord.Interaction, ip: str, razon: str = "No especificada"):
-    track_command(interaction.guild_id, "ban-ip")
+    schedule_music_log(track_command, interaction.guild_id, "ban-ip")
     
     if is_ip_banned(ip):
         embed = build_embed(
             title="ℹ️ La IP ya está baneada",
             color=COLOR_AMBER
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     ban_ip(ip, reason=razon, moderator=str(interaction.user))
@@ -4062,14 +4070,14 @@ async def ban_ip_cmd(interaction: discord.Interaction, ip: str, razon: str = "No
             ("👤 Moderador", interaction.user.mention, True)
         ]
     )
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 
 @bot.tree.command(name="unban-ip", description="[Mod] Desbanea una IP.")
 @app_commands.describe(ip="Dirección IP a desbanear")
 @app_commands.checks.has_permissions(ban_members=True)
 async def unban_ip_cmd(interaction: discord.Interaction, ip: str):
-    track_command(interaction.guild_id, "unban-ip")
+    schedule_music_log(track_command, interaction.guild_id, "unban-ip")
     
     if unban_ip(ip):
         record_log(
@@ -4084,14 +4092,14 @@ async def unban_ip_cmd(interaction: discord.Interaction, ip: str):
             description=f"La IP `{ip}` ha sido desbaneada.",
             color=COLOR_OK
         )
-        await interaction.response.send_message(embed=embed)
+        await send_styled(interaction.response.send_message, embed=embed)
     else:
         embed = build_embed(
             title="❌ IP no encontrada",
             description=f"No se encontró la IP `{ip}` en la lista de baneadas.",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="multicuenta", description="[Admin] Detecta y maneja posibles multicuentas.")
@@ -4105,7 +4113,7 @@ async def multicuenta(
     usuario: discord.Member | None = None,
     ip: str | None = None
 ):
-    track_command(interaction.guild_id, "multicuenta")
+    schedule_music_log(track_command, interaction.guild_id, "multicuenta")
     
     user_ips_data = load_user_ips()
     banned_ips_data = load_banned_ips()
@@ -4118,7 +4126,7 @@ async def multicuenta(
                 description=f"No hay información de IP para **{usuario}**.",
                 color=COLOR_AMBER
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         same_ip_users = []
@@ -4166,7 +4174,7 @@ async def multicuenta(
         )
         embed.set_footer(text="Nexus Anti-Multicuenta")
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         
     elif ip:
         if ip not in user_ips_data.values():
@@ -4175,7 +4183,7 @@ async def multicuenta(
                 description=f"No hay usuarios registrados con la IP `{ip}`.",
                 color=COLOR_AMBER
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         users_with_ip = []
@@ -4220,7 +4228,7 @@ async def multicuenta(
         )
         embed.set_footer(text="Nexus Anti-Multicuenta")
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         
     else:
         total_users = len(user_ips_data)
@@ -4268,13 +4276,13 @@ async def multicuenta(
         
         embed.set_footer(text="Nexus Anti-Multicuenta")
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="muted-list", description="[Mod] Muestra la lista de usuarios muteados.")
 @app_commands.checks.has_permissions(moderate_members=True)
 async def muted_list(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "muted-list")
+    schedule_music_log(track_command, interaction.guild_id, "muted-list")
     
     data = load_muted()
     muted_users = []
@@ -4296,7 +4304,7 @@ async def muted_list(interaction: discord.Interaction):
             description="No hay usuarios muteados en este servidor.",
             color=COLOR_AMBER
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     pages = []
@@ -4336,9 +4344,9 @@ async def muted_list(interaction: discord.Interaction):
     
     if len(pages) > 1:
         view = Paginator(pages, autor_id=interaction.user.id)
-        await interaction.response.send_message(embed=pages[0], view=view, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=pages[0], view=view, ephemeral=True)
     else:
-        await interaction.response.send_message(embed=pages[0], ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=pages[0], ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -4366,7 +4374,7 @@ async def actualizar_enlace(
 ):
     await interaction.response.defer(ephemeral=True)
 
-    track_command(interaction.guild_id, "actualizar-enlace")
+    schedule_music_log(track_command, interaction.guild_id, "actualizar-enlace")
     cfg = get_guild_config(interaction.guild_id)
     cfg["current_link"] = nuevo_enlace
     update_guild_config(interaction.guild_id, cfg)
@@ -4386,7 +4394,7 @@ async def actualizar_enlace(
             color=COLOR_OK,
             fields=[("🔗 Nuevo enlace", nuevo_enlace, False)],
         )
-        await log_channel.send(embed=log_embed)
+        await send_styled(log_channel.send, embed=log_embed)
 
     avisados = 0
     if avisar is None or avisar.value == "si":
@@ -4415,7 +4423,7 @@ async def actualizar_enlace(
                         color=Config.COLOR_SUCCESS,
                         fields=[("🔗 Enlace de descarga", nuevo_enlace, False)]
                     )
-                    await member.send(embed=dm_embed)
+                    await send_styled(member.send, embed=dm_embed)
                     avisados += 1
                 except:
                     pass
@@ -4429,10 +4437,10 @@ async def actualizar_enlace(
             ("📨 Usuarios avisados", str(avisados), True),
         ],
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 
-@bot.tree.command(name="config-logs", description="[Admin] Configura los canales de log del servidor.")
+@config_group.command(name="logs", description="[Admin] Configura los canales de log del servidor.")
 @app_commands.describe(
     tipo="Tipo de evento a configurar",
     canal="Canal donde se enviarán los logs (déjalo vacío para desactivar)"
@@ -4451,7 +4459,7 @@ async def config_logs(
     tipo: app_commands.Choice[str],
     canal: discord.TextChannel | None = None
 ):
-    track_command(interaction.guild_id, "config-logs")
+    schedule_music_log(track_command, interaction.guild_id, "config-logs")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     cfg["log_channels"][tipo.value] = canal.id if canal else None
@@ -4466,7 +4474,7 @@ async def config_logs(
         ),
         color=COLOR_OK,
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="config-rol-enlace", description="[Admin] Agrega o quita roles autorizados para /enlace.")
@@ -4484,7 +4492,7 @@ async def config_rol_enlace(
     accion: app_commands.Choice[str],
     rol: discord.Role
 ):
-    track_command(interaction.guild_id, "config-rol-enlace")
+    schedule_music_log(track_command, interaction.guild_id, "config-rol-enlace")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     roles = set(cfg.get("roles_enlace", []))
@@ -4495,7 +4503,7 @@ async def config_rol_enlace(
                 title="ℹ️ Este rol ya está autorizado",
                 color=COLOR_AMBER,
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
             return
         roles.add(rol.id)
         titulo = "✅ Rol agregado"
@@ -4506,7 +4514,7 @@ async def config_rol_enlace(
                 title="ℹ️ Este rol no estaba autorizado",
                 color=COLOR_AMBER,
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
             return
         roles.discard(rol.id)
         titulo = "✅ Rol quitado"
@@ -4516,7 +4524,7 @@ async def config_rol_enlace(
     update_guild_config(interaction.guild_id, cfg)
 
     embed = build_embed(title=titulo, description=descripcion, color=COLOR_OK)
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -4527,7 +4535,7 @@ async def config_rol_enlace(
 #  había forma de activar welcome_enabled/farewell_enabled)
 # ──────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="config-welcome", description="[Admin] Configura el sistema de bienvenidas.")
+@config_group.command(name="welcome", description="[Admin] Configura el sistema de bienvenidas.")
 @app_commands.describe(
     activado="¿Activar el sistema de bienvenidas?",
     canal="Canal donde se enviarán las bienvenidas",
@@ -4546,7 +4554,7 @@ async def config_welcome(
     mensaje: str | None = None,
     banner: str | None = None
 ):
-    track_command(interaction.guild_id, "config-welcome")
+    schedule_music_log(track_command, interaction.guild_id, "config-welcome")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
 
@@ -4570,10 +4578,10 @@ async def config_welcome(
             ("Mensaje", cfg.get("welcome_message", ""), False),
         ],
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="config-despedida", description="[Admin] Configura el sistema de despedidas.")
+@config_group.command(name="despedida", description="[Admin] Configura el sistema de despedidas.")
 @app_commands.describe(
     activado="¿Activar el sistema de despedidas?",
     canal="Canal donde se enviarán las despedidas",
@@ -4592,7 +4600,7 @@ async def config_despedida(
     mensaje: str | None = None,
     banner: str | None = None
 ):
-    track_command(interaction.guild_id, "config-despedida")
+    schedule_music_log(track_command, interaction.guild_id, "config-despedida")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
 
@@ -4616,10 +4624,10 @@ async def config_despedida(
             ("Mensaje", cfg.get("farewell_message", ""), False),
         ],
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="config-dm-bienvenida", description="[Admin] Configura el mensaje privado (DM) que reciben los nuevos miembros al unirse.")
+@config_group.command(name="dm-bienvenida", description="[Admin] Configura el mensaje privado (DM) que reciben los nuevos miembros al unirse.")
 @app_commands.describe(
     activado="¿Activar el DM de bienvenida?",
     mensaje="Mensaje que se enviará por privado (usa {mention}, {username}, {server}, {membercount}, etc.)",
@@ -4636,7 +4644,7 @@ async def config_dm_bienvenida(
     mensaje: str | None = None,
     banner: str | None = None
 ):
-    track_command(interaction.guild_id, "config-dm-bienvenida")
+    schedule_music_log(track_command, interaction.guild_id, "config-dm-bienvenida")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
 
@@ -4658,13 +4666,13 @@ async def config_dm_bienvenida(
             ("Mensaje", (cfg.get("dm_welcome_message", "") or "")[:1024], False),
         ],
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="test-dm-bienvenida", description="[Admin] Te envía por privado una vista previa del DM de bienvenida.")
 @app_commands.checks.has_permissions(administrator=True)
 async def test_dm_bienvenida(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "test-dm-bienvenida")
+    schedule_music_log(track_command, interaction.guild_id, "test-dm-bienvenida")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     member = interaction.user
@@ -4679,24 +4687,24 @@ async def test_dm_bienvenida(interaction: discord.Interaction):
         footer="Equipo de Nexus Studios · Vista previa",
     )
     try:
-        await member.send(embed=embed)
+        await send_styled(member.send, embed=embed)
     except discord.Forbidden:
         error_embed = build_embed(
             title="❌ No se pudo enviar",
             description="Tenés los DMs cerrados para este servidor, así que no pude mandarte la vista previa.",
             color=COLOR_WARN,
         )
-        await interaction.followup.send(embed=error_embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=error_embed, ephemeral=True)
         return
 
     confirm = build_embed(title="✅ Enviado", description="Revisá tus mensajes privados.", color=COLOR_OK)
-    await interaction.followup.send(embed=confirm, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=confirm, ephemeral=True)
 
 
 @bot.tree.command(name="test-welcome", description="[Admin] Previsualiza el mensaje de bienvenida.")
 @app_commands.checks.has_permissions(administrator=True)
 async def test_welcome(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "test-welcome")
+    schedule_music_log(track_command, interaction.guild_id, "test-welcome")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     member = interaction.user  # Member en contexto de servidor
@@ -4710,13 +4718,13 @@ async def test_welcome(interaction: discord.Interaction):
         image=cfg.get("welcome_banner"),
         footer=f"Miembro #{interaction.guild.member_count} · Vista previa",
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="test-despedida", description="[Admin] Previsualiza el mensaje de despedida.")
 @app_commands.checks.has_permissions(administrator=True)
 async def test_despedida(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "test-despedida")
+    schedule_music_log(track_command, interaction.guild_id, "test-despedida")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     member = interaction.user
@@ -4730,13 +4738,13 @@ async def test_despedida(interaction: discord.Interaction):
         image=cfg.get("farewell_banner"),
         footer="Vista previa",
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="ver-config", description="[Admin] Muestra la configuración actual del bot.")
 @app_commands.checks.has_permissions(administrator=True)
 async def ver_config(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "ver-config")
+    schedule_music_log(track_command, interaction.guild_id, "ver-config")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     guild = interaction.guild
@@ -4775,7 +4783,7 @@ async def ver_config(interaction: discord.Interaction):
             ),
         ],
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -4784,7 +4792,7 @@ async def ver_config(interaction: discord.Interaction):
 
 @bot.tree.command(name="ping", description="Muestra la latencia del bot.")
 async def ping(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "ping")
+    schedule_music_log(track_command, interaction.guild_id, "ping")
     latencia = round(bot.latency * 1000)
     uptime = format_uptime(time.time() - BOT_START_TIME)
 
@@ -4796,7 +4804,7 @@ async def ping(interaction: discord.Interaction):
             ("⏱️ Uptime", uptime, True),
         ],
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="say", description="[Admin] Hace que el bot envíe un mensaje.")
@@ -4806,7 +4814,7 @@ async def ping(interaction: discord.Interaction):
 )
 @app_commands.checks.has_permissions(administrator=True)
 async def say(interaction: discord.Interaction, mensaje: str, canal: discord.TextChannel | None = None):
-    track_command(interaction.guild_id, "say")
+    schedule_music_log(track_command, interaction.guild_id, "say")
     destino = canal or interaction.channel
     mensaje = mensaje.replace("\\n", "\n")
 
@@ -4817,19 +4825,19 @@ async def say(interaction: discord.Interaction, mensaje: str, canal: discord.Tex
             description=f"Mensaje enviado en {destino.mention}.",
             color=COLOR_OK,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
     except discord.Forbidden:
         embed = build_embed(
             title="❌ Sin permisos",
             description=f"No tengo permisos para enviar mensajes en {destino.mention}.",
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="server-info", description="Muestra información general del servidor.")
 async def server_info(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "server-info")
+    schedule_music_log(track_command, interaction.guild_id, "server-info")
     guild = interaction.guild
 
     online = sum(1 for m in guild.members if m.status != discord.Status.offline)
@@ -4858,13 +4866,13 @@ async def server_info(interaction: discord.Interaction):
     embed.add_field(name="🚀 Nivel de boost", value=f"Nivel {guild.premium_tier} ({guild.premium_subscription_count} boosts)", inline=True)
 
     embed.set_footer(text="Nexus System")
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 
 @bot.tree.command(name="buscar", description="Busca miembros por nombre.")
 @app_commands.describe(nombre="Nombre o parte del nombre a buscar")
 async def buscar(interaction: discord.Interaction, nombre: str):
-    track_command(interaction.guild_id, "buscar")
+    schedule_music_log(track_command, interaction.guild_id, "buscar")
     nombre_lower = nombre.lower()
 
     resultados = [
@@ -4878,7 +4886,7 @@ async def buscar(interaction: discord.Interaction, nombre: str):
             description=f"No se encontraron miembros que coincidan con `{nombre}`.",
             color=COLOR_AMBER,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
 
     lines = [f"• {m.mention} — `{m}` (ID: {m.id})" for m in resultados]
@@ -4888,7 +4896,7 @@ async def buscar(interaction: discord.Interaction, nombre: str):
         color=COLOR_MAIN,
         footer=f"{len(resultados)} resultado(s) mostrados (máx. 25)",
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 class AvatarDownloadView(discord.ui.View):
@@ -4917,7 +4925,7 @@ class AvatarDownloadView(discord.ui.View):
 @bot.tree.command(name="avatar", description="Muestra el avatar de un usuario.")
 @app_commands.describe(usuario="Usuario del que ver el avatar (opcional)")
 async def avatar(interaction: discord.Interaction, usuario: discord.Member | None = None):
-    track_command(interaction.guild_id, "avatar")
+    schedule_music_log(track_command, interaction.guild_id, "avatar")
     usuario = usuario or interaction.user
 
     global_avatar = usuario.avatar or usuario.default_avatar
@@ -4933,14 +4941,14 @@ async def avatar(interaction: discord.Interaction, usuario: discord.Member | Non
     embed.set_footer(text=BOT_FOOTER_TEXT, icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
 
     view = AvatarDownloadView(global_avatar, server_avatar)
-    await interaction.response.send_message(embed=embed, view=view)
+    await send_styled(interaction.response.send_message, embed=embed, view=view)
 
 
 
 @bot.tree.command(name="user-info", description="Muestra información de un usuario.")
 @app_commands.describe(usuario="Usuario a consultar (opcional)")
 async def user_info(interaction: discord.Interaction, usuario: discord.Member | None = None):
-    track_command(interaction.guild_id, "user-info")
+    schedule_music_log(track_command, interaction.guild_id, "user-info")
     usuario = usuario or interaction.user
 
     roles = [r.mention for r in usuario.roles if r.name != "@everyone"]
@@ -4964,7 +4972,7 @@ async def user_info(interaction: discord.Interaction, usuario: discord.Member | 
     embed.add_field(name=f"🎭 Roles ({len(roles)})", value=", ".join(roles) if roles else "Ninguno", inline=False)
 
     embed.set_footer(text="Nexus System")
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 # ──────────────────────────────────────────────────────────────
 #  COMANDO: /precio-nexus-pro  (versión privada)
@@ -4973,7 +4981,7 @@ async def user_info(interaction: discord.Interaction, usuario: discord.Member | 
 @bot.tree.command(name="precio-nexus-pro", description="Muestra los precios de Nexus Pro en USD, COP, BRL y ARS.")
 @app_commands.checks.cooldown(1, 10.0)
 async def precio_nexus_pro(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "precio-nexus-pro")
+    schedule_music_log(track_command, interaction.guild_id, "precio-nexus-pro")
     
     # Tasas de cambio aproximadas (actualizar periódicamente)
     USD_TO_COP = 4000
@@ -5031,7 +5039,7 @@ async def precio_nexus_pro(interaction: discord.Interaction):
         thumbnail="https://i.imgur.com/ejemplo.png",  # Cambiar por logo de Nexus Pro
     )
     
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -5105,7 +5113,7 @@ def _grant_firebase_nexus_coins(uid: str, amount: int) -> None:
 @tienda_group.command(name="nexusplus", description="Consulta los planes y adquiere la suscripción Nexus+.")
 @app_commands.checks.cooldown(1, 10.0)
 async def tienda_nexusplus(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "tienda-nexusplus")
+    schedule_music_log(track_command, interaction.guild_id, "tienda-nexusplus")
     planes = "\n".join(f"• **{plan}:** {precio} USD" for plan, precio in NEXUS_PLUS_PLANS)
     embed = build_embed(
         title="💎 Nexus+ · Suscripción",
@@ -5132,7 +5140,7 @@ async def tienda_nexusplus(interaction: discord.Interaction):
         url="https://discord.gg/Nahh9XhnvR",
         emoji="🎫",
     ))
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, view=view, ephemeral=True)
 
 
 @tienda_group.command(name="activar-nexusplus", description="[Admin] Activa o desactiva Nexus+ en un perfil web.")
@@ -5153,7 +5161,7 @@ async def tienda_admin_nexusplus(
     dias: app_commands.Range[int, 1, 1095] = 30,
 ):
     await interaction.response.defer(ephemeral=True, thinking=True)
-    track_command(interaction.guild_id, "tienda-activar-nexusplus")
+    schedule_music_log(track_command, interaction.guild_id, "tienda-activar-nexusplus")
     enabled = accion.value == "activar"
 
     try:
@@ -5181,7 +5189,7 @@ async def tienda_admin_coins(
     cantidad: app_commands.Range[int, 1, 1000000],
 ):
     await interaction.response.defer(ephemeral=True, thinking=True)
-    track_command(interaction.guild_id, "tienda-dar-coins")
+    schedule_music_log(track_command, interaction.guild_id, "tienda-dar-coins")
 
     try:
         await asyncio.to_thread(_grant_firebase_nexus_coins, uid, cantidad)
@@ -5198,7 +5206,7 @@ async def tienda_admin_coins(
 @tienda_group.command(name="coins", description="Consulta los paquetes y adquiere Nexus Coins.")
 @app_commands.checks.cooldown(1, 10.0)
 async def tienda_coins(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "tienda-coins")
+    schedule_music_log(track_command, interaction.guild_id, "tienda-coins")
     paquetes = "\n".join(
         f"• **{cantidad} Nexus Coins:** {precio} USD · {nombre}"
         for cantidad, precio, nombre in NEXUS_COIN_PACKAGES
@@ -5227,13 +5235,13 @@ async def tienda_coins(interaction: discord.Interaction):
         url="https://discord.gg/Nahh9XhnvR",
         emoji="🎫",
     ))
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, view=view, ephemeral=True)
 
 
 @tienda_group.command(name="precios", description="Publica los precios de Nexus+ y Nexus Coins.")
 @app_commands.checks.cooldown(1, 30.0)
 async def tienda_precios(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "tienda-precios")
+    schedule_music_log(track_command, interaction.guild_id, "tienda-precios")
     planes = "\n".join(f"**{plan}:** {precio}" for plan, precio in NEXUS_PLUS_PLANS)
     paquetes = "\n".join(
         f"**{cantidad} Coins:** {precio} · {nombre}"
@@ -5262,7 +5270,7 @@ async def tienda_precios(interaction: discord.Interaction):
         url=f"{NEXUS_PLUS_URL}#np-coins",
         emoji="🪙",
     ))
-    await interaction.response.send_message(embed=embed, view=view)
+    await send_styled(interaction.response.send_message, embed=embed, view=view)
 
 
 bot.tree.add_command(tienda_group)
@@ -5275,7 +5283,7 @@ bot.tree.add_command(tienda_group)
 @bot.tree.command(name="nexus-free", description="Muestra el enlace de descarga de Nexus Core (versión Free).")
 @app_commands.checks.cooldown(1, 10.0)
 async def nexus_free(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "nexus-free")
+    schedule_music_log(track_command, interaction.guild_id, "nexus-free")
     
     LINK_NEXUS_FREE = "https://github.com/santhiagocaro05-debug/NEXUS-INSTALLER/releases/download/installer/Nexus-core-Setup-1.0.0-V3.exe"
     
@@ -5306,7 +5314,7 @@ async def nexus_free(interaction: discord.Interaction):
         footer="Nexus Core · Versión Gratuita",
     )
     
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -5316,7 +5324,7 @@ async def nexus_free(interaction: discord.Interaction):
 @bot.tree.command(name="nexus-free-public", description="[Público] Muestra el enlace de Nexus Core Free en el canal.")
 @app_commands.checks.cooldown(1, 30.0)
 async def nexus_free_public(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "nexus-free-public")
+    schedule_music_log(track_command, interaction.guild_id, "nexus-free-public")
     
     LINK_NEXUS_FREE = "https://github.com/santhiagocaro05-debug/NEXUS-INSTALLER/releases/download/installer/Nexus-core-Setup-1.0.0-V3.exe"
     
@@ -5339,7 +5347,7 @@ async def nexus_free_public(interaction: discord.Interaction):
         footer="Nexus Core · Gratuito para siempre",
     )
     
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -5349,7 +5357,7 @@ async def nexus_free_public(interaction: discord.Interaction):
 @bot.tree.command(name="pagina-web", description="🌐 Visita la página web oficial de Nexus Pro.")
 @app_commands.checks.cooldown(1, 10.0)
 async def pagina_web(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "pagina-web")
+    schedule_music_log(track_command, interaction.guild_id, "pagina-web")
     
     URL_WEB = "https://nexusforgex.xyz/"
     
@@ -5412,7 +5420,7 @@ async def pagina_web(interaction: discord.Interaction):
         if hasattr(item, 'custom_id') and item.custom_id == "descargar_nexus":
             item.callback = descargar_button
     
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, view=view, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -5774,7 +5782,7 @@ async def encuesta(
     multiple: app_commands.Choice[str] | None = None,
     max_votos: int = 3
 ):
-    track_command(interaction.guild_id, "encuesta")
+    schedule_music_log(track_command, interaction.guild_id, "encuesta")
     
     # Validar duración
     if duracion < 30:
@@ -5783,7 +5791,7 @@ async def encuesta(
             description="La duración mínima es de 30 segundos.",
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     if duracion > 86400:
@@ -5792,7 +5800,7 @@ async def encuesta(
             description="La duración máxima es de 24 horas (86400 segundos).",
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     # Recolectar opciones
@@ -5810,7 +5818,7 @@ async def encuesta(
             description="Debes proporcionar al menos 2 opciones.",
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     # Configurar opciones
@@ -5845,7 +5853,7 @@ async def encuesta(
     )
     
     # Enviar mensaje
-    await interaction.response.send_message(embed=embed, view=view)
+    await send_styled(interaction.response.send_message, embed=embed, view=view)
     message = await interaction.original_response()
     view.poll_message = message
     
@@ -5863,7 +5871,7 @@ async def encuesta(
 )
 @app_commands.checks.has_permissions(manage_messages=True)
 async def cerrar_encuesta(interaction: discord.Interaction, poll_id: str):
-    track_command(interaction.guild_id, "cerrar-encuesta")
+    schedule_music_log(track_command, interaction.guild_id, "cerrar-encuesta")
     
     poll_data = get_poll(interaction.guild_id, poll_id)
     if not poll_data:
@@ -5872,7 +5880,7 @@ async def cerrar_encuesta(interaction: discord.Interaction, poll_id: str):
             description="No se encontró una encuesta con ese ID.",
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     # Verificar permisos (creador o admin)
@@ -5882,7 +5890,7 @@ async def cerrar_encuesta(interaction: discord.Interaction, poll_id: str):
             description="Solo el creador de la encuesta o un administrador pueden cerrarla.",
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     if poll_data.get("finished", False):
@@ -5890,7 +5898,7 @@ async def cerrar_encuesta(interaction: discord.Interaction, poll_id: str):
             title="ℹ️ Encuesta ya finalizada",
             color=COLOR_AMBER,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     # Finalizar encuesta
@@ -5902,14 +5910,14 @@ async def cerrar_encuesta(interaction: discord.Interaction, poll_id: str):
         description="La encuesta ha sido finalizada anticipadamente.",
         color=COLOR_OK,
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 @bot.tree.command(name="resultados-encuesta", description="📊 Muestra los resultados de una encuesta.")
 @app_commands.describe(
     poll_id="ID de la encuesta (se muestra en el footer)"
 )
 async def resultados_encuesta(interaction: discord.Interaction, poll_id: str):
-    track_command(interaction.guild_id, "resultados-encuesta")
+    schedule_music_log(track_command, interaction.guild_id, "resultados-encuesta")
     
     poll_data = get_poll(interaction.guild_id, poll_id)
     if not poll_data:
@@ -5918,7 +5926,7 @@ async def resultados_encuesta(interaction: discord.Interaction, poll_id: str):
             description="No se encontró una encuesta con ese ID.",
             color=COLOR_WARN,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     # Construir resultados
@@ -5947,12 +5955,12 @@ async def resultados_encuesta(interaction: discord.Interaction, poll_id: str):
         text=f"ID: {poll_id} · {'Finalizada' if poll_data.get('finished') else 'Activa'}"
     )
     
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 @bot.tree.command(name="listar-encuestas", description="📋 Muestra todas las encuestas activas del servidor.")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def listar_encuestas(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "listar-encuestas")
+    schedule_music_log(track_command, interaction.guild_id, "listar-encuestas")
     
     polls = get_guild_polls(interaction.guild_id)
     active_polls = [p for p in polls if not p.get("finished", False)]
@@ -5963,7 +5971,7 @@ async def listar_encuestas(interaction: discord.Interaction):
             description="No hay encuestas activas en este servidor.",
             color=COLOR_AMBER,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     embed = nexus_embed(
@@ -5997,7 +6005,7 @@ async def listar_encuestas(interaction: discord.Interaction):
         )
     
     embed.set_footer(text="Usa /resultados-encuesta <ID> para ver detalles")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 # ──────────────────────────────────────────────────────────────
 #  LOGS Y ESTADÍSTICAS
@@ -6017,21 +6025,21 @@ async def listar_encuestas(interaction: discord.Interaction):
 ])
 @app_commands.checks.has_permissions(administrator=True)
 async def logs_cmd(interaction: discord.Interaction, tipo: app_commands.Choice[str] | None = None):
-    track_command(interaction.guild_id, "logs")
+    schedule_music_log(track_command, interaction.guild_id, "logs")
     entries = get_logs(interaction.guild_id, tipo.value if tipo else None)
     pages = build_log_pages(entries)
 
     if len(pages) > 1:
         view = Paginator(pages, autor_id=interaction.user.id)
-        await interaction.response.send_message(embed=pages[0], view=view, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=pages[0], view=view, ephemeral=True)
     else:
-        await interaction.response.send_message(embed=pages[0], ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=pages[0], ephemeral=True)
 
 
 @bot.tree.command(name="stats", description="Muestra estadísticas y analíticas del servidor.")
 @app_commands.checks.has_permissions(administrator=True)
 async def stats_cmd(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "stats")
+    schedule_music_log(track_command, interaction.guild_id, "stats")
     data = get_guild_stats(interaction.guild_id)
 
     comandos = data.get("commands_used", {})
@@ -6058,7 +6066,7 @@ async def stats_cmd(interaction: discord.Interaction):
             ("🏆 Comandos más usados", top_str, False),
         ],
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -6083,13 +6091,13 @@ async def ayuda(interaction: discord.Interaction):
         footer="Nexus System · Usa el menú para explorar",
     )
     view = HelpView(autor_id=interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True, **banner(embed, "help"))
+    await send_styled(interaction.response.send_message, embed=embed, view=view, ephemeral=True, **banner(embed, "help"))
 
 
 @nexus_group.command(name="ayuda-error", description="Te ayuda a diagnosticar un mensaje de error.")
 @app_commands.describe(mensaje_error="Pega aquí el mensaje de error que recibiste")
 async def ayuda_error(interaction: discord.Interaction, mensaje_error: str):
-    track_command(interaction.guild_id, "ayuda-error")
+    schedule_music_log(track_command, interaction.guild_id, "ayuda-error")
     texto = mensaje_error.lower()
 
     coincidencias = []
@@ -6119,7 +6127,7 @@ async def ayuda_error(interaction: discord.Interaction, mensaje_error: str):
             fields=fields,
         )
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 TERMINOS_EMBED_DESCRIPTION = (
     "⚠️ **ESTE DOCUMENTO ES CONFIDENCIAL Y EXCLUSIVO PARA MIEMBROS AUTORIZADOS** ⚠️\n\n"
@@ -6172,8 +6180,8 @@ TERMINOS_EMBED_DESCRIPTION = (
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if interaction.guild_id:
-        bump_stat(interaction.guild_id, "errors_logged")
-        record_log(interaction.guild_id, "error", f"{type(error).__name__}: {error}", str(interaction.user))
+        schedule_music_log(bump_stat, interaction.guild_id, "errors_logged")
+        schedule_music_log(record_log, interaction.guild_id, "error", type(error).__name__, str(interaction.user))
 
     if isinstance(error, app_commands.MissingPermissions):
         embed = build_embed(
@@ -6209,9 +6217,9 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
     try:
         if interaction.response.is_done():
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         else:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
     except discord.NotFound:
         # La interacción ya expiró (pasaron más de 15 min, o más de 3s sin defer). No hay nada más que hacer.
         pass
@@ -6350,7 +6358,7 @@ class AnnounceModal(discord.ui.Modal):
             allowed_mentions = discord.AllowedMentions(everyone=True)
 
         # Enviar el anuncio
-        await self.channel.send(content=content, embed=embed, allowed_mentions=allowed_mentions)
+        await send_styled(self.channel.send, content=content, embed=embed, allowed_mentions=allowed_mentions)
         
         # Confirmar al usuario
         embed_confirm = build_embed(
@@ -6362,7 +6370,7 @@ class AnnounceModal(discord.ui.Modal):
                 ("📊 Canal", self.channel.mention, True),
             ]
         )
-        await interaction.response.send_message(embed=embed_confirm, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed_confirm, ephemeral=True)
         
         # Registrar en logs
         record_log(
@@ -6459,7 +6467,7 @@ class AnnounceView(discord.ui.View):
 @app_commands.checks.has_permissions(administrator=True)
 async def announce(interaction: discord.Interaction):
     """Panel para enviar anuncios con diseño de noticia."""
-    track_command(interaction.guild_id, "announce")
+    schedule_music_log(track_command, interaction.guild_id, "announce")
     
     # Obtener canales de texto
     channels = [ch for ch in interaction.guild.text_channels if ch.permissions_for(interaction.guild.me).send_messages]
@@ -6470,7 +6478,7 @@ async def announce(interaction: discord.Interaction):
             description="No tengo permisos para enviar mensajes en ningún canal.",
             color=COLOR_WARN
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
         return
     
     embed = build_embed(
@@ -6488,7 +6496,7 @@ async def announce(interaction: discord.Interaction):
     )
     
     view = AnnounceView(interaction.user.id, channels)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, view=view, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -6557,7 +6565,7 @@ class AdminPanelView(discord.ui.View):
                 description="No hay usuarios muteados en este servidor.",
                 color=COLOR_AMBER
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
             return
         
         lines = []
@@ -6588,7 +6596,7 @@ class AdminPanelView(discord.ui.View):
             color=COLOR_MAIN,
             footer=f"Total: {len(muted_users)} usuarios"
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
     
     @discord.ui.button(label="🔄 Recargar panel", style=discord.ButtonStyle.primary, emoji="🔄")
     async def reload_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -6653,7 +6661,7 @@ class AdminBanModal(discord.ui.Modal):
                 description="No se pudo encontrar un usuario con ese ID.",
                 color=COLOR_WARN
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         guild = bot.get_guild(self.guild_id)
@@ -6665,7 +6673,7 @@ class AdminBanModal(discord.ui.Modal):
                 description="Su rol es igual o superior al mío.",
                 color=COLOR_WARN
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         # Procesar duración
@@ -6682,7 +6690,7 @@ class AdminBanModal(discord.ui.Modal):
                     description="Usa: `5m`, `2h`, `1d`, `1w`, `1M`, `1y`",
                     color=COLOR_WARN
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
                 return
             
             unit_names = {'m': 'minuto(s)', 'h': 'hora(s)', 'd': 'día(s)', 'w': 'semana(s)', 'M': 'mes(es)', 'y': 'año(s)'}
@@ -6704,7 +6712,7 @@ class AdminBanModal(discord.ui.Modal):
             dm_embed.set_footer(text="Nexus Moderation System")
             
             view = AppealView(self.guild_id, user_id, "ban")
-            await user.send(embed=dm_embed, view=view)
+            await send_styled(user.send, embed=dm_embed, view=view)
         except:
             pass
         
@@ -6731,7 +6739,7 @@ class AdminBanModal(discord.ui.Modal):
                 ("👤 Moderador", interaction.user.mention, True)
             ]
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 class AdminKickModal(discord.ui.Modal):
@@ -6766,7 +6774,7 @@ class AdminKickModal(discord.ui.Modal):
                 description="No se pudo encontrar un usuario con ese ID.",
                 color=COLOR_WARN
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         guild = bot.get_guild(self.guild_id)
@@ -6778,7 +6786,7 @@ class AdminKickModal(discord.ui.Modal):
                 description="El usuario no está en el servidor.",
                 color=COLOR_WARN
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         if member.top_role >= guild.me.top_role:
@@ -6787,7 +6795,7 @@ class AdminKickModal(discord.ui.Modal):
                 description="Su rol es igual o superior al mío.",
                 color=COLOR_WARN
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         razon = self.razon.value or "No especificada"
@@ -6805,7 +6813,7 @@ class AdminKickModal(discord.ui.Modal):
             dm_embed.set_footer(text="Nexus Moderation System")
             
             view = AppealView(self.guild_id, user_id, "kick")
-            await member.send(embed=dm_embed, view=view)
+            await send_styled(member.send, embed=dm_embed, view=view)
         except:
             pass
         
@@ -6829,7 +6837,7 @@ class AdminKickModal(discord.ui.Modal):
                 ("👤 Moderador", interaction.user.mention, True)
             ]
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 class AdminMuteModal(discord.ui.Modal):
@@ -6872,7 +6880,7 @@ class AdminMuteModal(discord.ui.Modal):
                 description="No se pudo encontrar un usuario con ese ID.",
                 color=COLOR_WARN
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         guild = bot.get_guild(self.guild_id)
@@ -6884,7 +6892,7 @@ class AdminMuteModal(discord.ui.Modal):
                 description="El usuario no está en el servidor.",
                 color=COLOR_WARN
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         if member.top_role >= guild.me.top_role:
@@ -6893,7 +6901,7 @@ class AdminMuteModal(discord.ui.Modal):
                 description="Su rol es igual o superior al mío.",
                 color=COLOR_WARN
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         razon = self.razon.value or "No especificada"
@@ -6931,7 +6939,7 @@ class AdminMuteModal(discord.ui.Modal):
                     description="Usa: `5m`, `2h`, `1d`, `1w`, `1M`",
                     color=COLOR_WARN
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
                 return
         
         await member.timeout(discord.utils.utcnow() + timedelta(seconds=seconds), reason=razon)
@@ -6952,7 +6960,7 @@ class AdminMuteModal(discord.ui.Modal):
             dm_embed.set_footer(text="Nexus Moderation System")
             
             view = AppealView(self.guild_id, user_id, "mute")
-            await member.send(embed=dm_embed, view=view)
+            await send_styled(member.send, embed=dm_embed, view=view)
         except:
             pass
         
@@ -6973,7 +6981,7 @@ class AdminMuteModal(discord.ui.Modal):
                 ("👤 Moderador", interaction.user.mention, True)
             ]
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 class AdminUnmuteModal(discord.ui.Modal):
@@ -7000,7 +7008,7 @@ class AdminUnmuteModal(discord.ui.Modal):
                 description="No se pudo encontrar un usuario con ese ID.",
                 color=COLOR_WARN
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             return
         
         guild = bot.get_guild(self.guild_id)
@@ -7020,7 +7028,7 @@ class AdminUnmuteModal(discord.ui.Modal):
                 timestamp=datetime.now(timezone.utc)
             )
             dm_embed.add_field(name="👤 Moderador", value=str(interaction.user), inline=True)
-            await user.send(embed=dm_embed)
+            await send_styled(user.send, embed=dm_embed)
         except:
             pass
         
@@ -7036,7 +7044,7 @@ class AdminUnmuteModal(discord.ui.Modal):
             description=f"**{user}** ha sido desmuteado correctamente.",
             color=COLOR_OK
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="paneladmin", description="🛡️ Abre el panel de administración con botones.")
@@ -7061,7 +7069,7 @@ async def paneladmin(interaction: discord.Interaction):
     )
     
     view = AdminPanelView(interaction.user.id, interaction.guild_id)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True, **banner(embed, "help"))
+    await send_styled(interaction.response.send_message, embed=embed, view=view, ephemeral=True, **banner(embed, "help"))
 
 
 # ──────────────────────────────────────────────────────────────
@@ -7370,12 +7378,12 @@ class BlockChannelView(discord.ui.View):
 @app_commands.checks.has_permissions(administrator=True)
 async def block_server(interaction: discord.Interaction):
     """Panel para bloquear canales (nadie puede escribir)."""
-    track_command(interaction.guild_id, "block-server")
+    schedule_music_log(track_command, interaction.guild_id, "block-server")
     
     view = BlockChannelView(interaction.user.id, interaction.guild_id)
     embed = view.build_embed()
     
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, view=view, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -7384,6 +7392,8 @@ async def block_server(interaction: discord.Interaction):
 
 @bot.event
 async def on_message(message: discord.Message):
+    set_style_context(bot,message.guild)
+    if message.author.bot: return
     # ------------------
     # TRAP CHANNEL LOGIC
     # ------------------
@@ -7409,7 +7419,7 @@ async def on_message(message: discord.Message):
                         color=Config.COLOR_ERROR,
                         image=TRAP_BANNER_URL,
                     )
-                    await message.author.send(embed=dm_embed)
+                    await send_styled(message.author.send, embed=dm_embed)
                 except (discord.Forbidden, discord.HTTPException):
                     # El usuario tiene los DMs cerrados o algo falló al mandarlo;
                     # no debe frenar el baneo por esto.
@@ -7430,7 +7440,7 @@ async def on_message(message: discord.Message):
                                 color=Config.COLOR_ERROR,
                                 image=TRAP_BANNER_URL,
                             )
-                            await log_ch.send(embed=embed_trap)
+                            await send_styled(log_ch.send, embed=embed_trap)
                 except discord.Forbidden:
                     print("No tengo permisos para banear en el canal trampa.")
                 return # Stop processing
@@ -7459,9 +7469,9 @@ async def on_message(message: discord.Message):
             if re.search(r"(https?://|discord\.gg/|www\.)\S+", message.content, re.IGNORECASE):
                 try:
                     await message.delete()
-                    warning = await message.channel.send(
-                        f"🔗 {message.author.mention}, no se permiten links en este servidor.",
-                        delete_after=6
+                    warning = await send_styled(message.channel.send, 
+                        embed=build_embed(title="⚠️ Enlace bloqueado", description=f"## Protección de la comunidad\n> {message.author.mention}, los enlaces no están permitidos en este servidor.", color=COLOR_WARN),
+                        allowed_mentions=discord.AllowedMentions.none(), delete_after=10
                     )
                 except:
                     pass
@@ -7481,7 +7491,7 @@ async def on_message(message: discord.Message):
                 spam_tracker[message.author.id] = []
                 try:
                     await message.author.timeout(timedelta(minutes=5), reason="Antispam: envío de mensajes en ráfaga")
-                    await message.channel.send(
+                    await send_styled(message.channel.send, 
                         embed=build_embed(
                             title="🚫 Antispam activado",
                             description=f"{message.author.mention} fue silenciado 5 minutos por mandar mensajes muy rápido.",
@@ -7546,7 +7556,7 @@ async def on_message(message: discord.Message):
                             footer="Nexus Levels",
                         )
                         try:
-                            await destino.send(embed=embed)
+                            await send_styled(destino.send, embed=embed)
                         except (discord.Forbidden, discord.HTTPException):
                             pass
 
@@ -7564,13 +7574,13 @@ async def on_message(message: discord.Message):
 @app_commands.checks.has_permissions(kick_members=True)
 async def warn_user(interaction: discord.Interaction, usuario: discord.Member, razon: str = "Sin razón especificada"):
     if usuario.id == Config.OWNER_ID:
-        return await interaction.response.send_message(embed=build_embed(title="Error", description="No puedo advertir al Owner.", color=Config.COLOR_ERROR), ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=build_embed(title="Error", description="No puedo advertir al Owner.", color=Config.COLOR_ERROR), ephemeral=True)
 
     total = add_warn(interaction.guild_id, usuario.id, razon, str(interaction.user))
 
     # DM al usuario
     try:
-        await usuario.send(embed=build_embed(
+        await send_styled(usuario.send, embed=build_embed(
             title="⚠️ Has sido advertido",
             description=f"Has recibido una advertencia en **{interaction.guild.name}**.",
             color=Config.COLOR_WARNING,
@@ -7592,7 +7602,7 @@ async def warn_user(interaction: discord.Interaction, usuario: discord.Member, r
             ("Total de advertencias", str(total), True),
         ]
     )
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
     record_log(interaction.guild_id, "Warn", f"{usuario} fue advertido por: {razon} (total: {total})", str(interaction.user))
 
 
@@ -7608,7 +7618,7 @@ async def warnings_cmd(interaction: discord.Interaction, usuario: discord.Member
             description=f"{usuario.mention} no tiene advertencias registradas.",
             color=Config.COLOR_SUCCESS
         )
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     lines = []
     for i, w in enumerate(entries[-15:], start=1):
@@ -7627,7 +7637,7 @@ async def warnings_cmd(interaction: discord.Interaction, usuario: discord.Member
         thumbnail=usuario.display_avatar.url,
         footer=f"Total: {len(entries)} advertencia(s)"
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="clearwarns", description="🧹 Elimina todas las advertencias de un usuario.")
@@ -7640,7 +7650,7 @@ async def clearwarns_cmd(interaction: discord.Interaction, usuario: discord.Memb
         description=f"Se eliminaron **{count}** advertencia(s) de {usuario.mention}.",
         color=Config.COLOR_SUCCESS
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
     record_log(interaction.guild_id, "ClearWarns", f"Se limpiaron {count} advertencias de {usuario}", str(interaction.user))
 
 
@@ -7654,7 +7664,7 @@ async def slowmode_cmd(interaction: discord.Interaction, segundos: app_commands.
     else:
         desc = f"Se configuró el modo lento a **{segundos}s** en {interaction.channel.mention}."
     embed = build_embed(title="🐌 Modo lento actualizado", description=desc, color=Config.COLOR_SUCCESS)
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
     record_log(interaction.guild_id, "Slowmode", f"Modo lento de #{interaction.channel.name} a {segundos}s", str(interaction.user))
 
 
@@ -7666,11 +7676,11 @@ async def nick_cmd(interaction: discord.Interaction, usuario: discord.Member, ap
         await usuario.edit(nick=apodo)
     except discord.Forbidden:
         embed = build_embed(title="❌ Error", description="No tengo permisos para cambiar el apodo de ese usuario.", color=Config.COLOR_ERROR)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     desc = f"Se restableció el apodo de {usuario.mention}." if not apodo else f"El apodo de {usuario.mention} ahora es **{apodo}**."
     embed = build_embed(title="✏️ Apodo actualizado", description=desc, color=Config.COLOR_SUCCESS)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
     record_log(interaction.guild_id, "Nick", f"Apodo de {usuario} cambiado a: {apodo or '(restablecido)'}", str(interaction.user))
 
 
@@ -7679,10 +7689,10 @@ async def nick_cmd(interaction: discord.Interaction, usuario: discord.Member, ap
 @app_commands.checks.has_permissions(ban_members=True)
 async def softban_cmd(interaction: discord.Interaction, usuario: discord.Member, razon: str = "No especificada", dias: app_commands.Range[int, 1, 7] = 1):
     if usuario.id == Config.OWNER_ID:
-        return await interaction.response.send_message(embed=build_embed(title="Error", description="No puedo softbanear al Owner.", color=Config.COLOR_ERROR), ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=build_embed(title="Error", description="No puedo softbanear al Owner.", color=Config.COLOR_ERROR), ephemeral=True)
 
     try:
-        await usuario.send(embed=build_embed(
+        await send_styled(usuario.send, embed=build_embed(
             title="🔨 Has sido expulsado (softban)",
             description=f"Tus mensajes recientes fueron eliminados en **{interaction.guild.name}** y puedes volver a unirte.",
             color=Config.COLOR_WARNING,
@@ -7696,7 +7706,7 @@ async def softban_cmd(interaction: discord.Interaction, usuario: discord.Member,
         await interaction.guild.unban(usuario, reason="Softban - desbaneo automático")
     except discord.Forbidden:
         embed = build_embed(title="❌ Error", description="No tengo permisos suficientes para softbanear a este usuario.", color=Config.COLOR_ERROR)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     embed = build_embed(
         title="🔨 Softban aplicado",
@@ -7704,7 +7714,7 @@ async def softban_cmd(interaction: discord.Interaction, usuario: discord.Member,
         color=Config.COLOR_SUCCESS,
         fields=[("Razón", razon, False), ("Días de mensajes borrados", str(dias), True)]
     )
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
     record_log(interaction.guild_id, "Softban", f"{usuario} softbaneado por: {razon}", str(interaction.user))
 
 
@@ -7713,24 +7723,24 @@ async def softban_cmd(interaction: discord.Interaction, usuario: discord.Member,
 @app_commands.checks.has_permissions(moderate_members=True)
 async def timeout_cmd(interaction: discord.Interaction, usuario: discord.Member, duracion: str, razon: str = "No especificada"):
     if usuario.id == Config.OWNER_ID:
-        return await interaction.response.send_message(embed=build_embed(title="Error", description="No puedo silenciar al Owner.", color=Config.COLOR_ERROR), ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=build_embed(title="Error", description="No puedo silenciar al Owner.", color=Config.COLOR_ERROR), ephemeral=True)
 
     seconds = parse_duration_to_seconds(duracion)
     if seconds is None:
         embed = build_embed(title="❌ Duración inválida", description="Usá un formato como `10m`, `2h`, `1d` o `1w`.", color=Config.COLOR_ERROR)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
     if seconds > 28 * 86400:
         embed = build_embed(title="❌ Duración inválida", description="El timeout nativo de Discord tiene un máximo de 28 días.", color=Config.COLOR_ERROR)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     try:
         await usuario.timeout(timedelta(seconds=seconds), reason=f"{razon} — por {interaction.user}")
     except discord.Forbidden:
         embed = build_embed(title="❌ Error", description="No tengo permisos suficientes para silenciar a este usuario.", color=Config.COLOR_ERROR)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     try:
-        await usuario.send(embed=build_embed(
+        await send_styled(usuario.send, embed=build_embed(
             title="🔇 Has sido silenciado",
             description=f"Fuiste silenciado en **{interaction.guild.name}** por **{format_seconds(seconds)}**.",
             color=Config.COLOR_WARNING,
@@ -7745,7 +7755,7 @@ async def timeout_cmd(interaction: discord.Interaction, usuario: discord.Member,
         color=Config.COLOR_SUCCESS,
         fields=[("Razón", razon, False)]
     )
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
     record_log(interaction.guild_id, "Timeout", f"{usuario} silenciado {format_seconds(seconds)} por: {razon}", str(interaction.user))
 
 
@@ -7757,10 +7767,10 @@ async def untimeout_cmd(interaction: discord.Interaction, usuario: discord.Membe
         await usuario.timeout(None, reason=f"Timeout removido por {interaction.user}")
     except discord.Forbidden:
         embed = build_embed(title="❌ Error", description="No tengo permisos suficientes.", color=Config.COLOR_ERROR)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     embed = build_embed(title="🔊 Timeout removido", description=f"Se le quitó el timeout a {usuario.mention}.", color=Config.COLOR_SUCCESS)
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
     record_log(interaction.guild_id, "Untimeout", f"Timeout removido a {usuario}", str(interaction.user))
 
 
@@ -7771,7 +7781,7 @@ async def unwarn_cmd(interaction: discord.Interaction, usuario: discord.Member, 
     removed = remove_warn(interaction.guild_id, usuario.id, numero)
     if removed is None:
         embed = build_embed(title="❌ No encontrada", description=f"No existe la advertencia #{numero} para {usuario.mention}. Revisá con `/warnings`.", color=Config.COLOR_ERROR)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     embed = build_embed(
         title="🗑️ Advertencia eliminada",
@@ -7779,7 +7789,7 @@ async def unwarn_cmd(interaction: discord.Interaction, usuario: discord.Member, 
         color=Config.COLOR_SUCCESS,
         fields=[("Razón original", removed.get("reason", "?"), False)]
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
     record_log(interaction.guild_id, "Unwarn", f"Se eliminó la advertencia #{numero} de {usuario}", str(interaction.user))
 
 
@@ -7793,7 +7803,7 @@ async def unwarn_cmd(interaction: discord.Interaction, usuario: discord.Member, 
 async def role_cmd(interaction: discord.Interaction, usuario: discord.Member, rol: discord.Role, accion: app_commands.Choice[str]):
     if rol >= interaction.guild.me.top_role:
         embed = build_embed(title="❌ Error", description=f"No puedo gestionar el rol {rol.mention} porque está por encima de mi rol más alto.", color=Config.COLOR_ERROR)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     try:
         if accion.value == "add":
@@ -7804,10 +7814,10 @@ async def role_cmd(interaction: discord.Interaction, usuario: discord.Member, ro
             desc = f"Se quitó el rol {rol.mention} a {usuario.mention}."
     except discord.Forbidden:
         embed = build_embed(title="❌ Error", description="No tengo permisos suficientes para gestionar ese rol.", color=Config.COLOR_ERROR)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     embed = build_embed(title="🎭 Rol actualizado", description=desc, color=Config.COLOR_SUCCESS)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
     record_log(interaction.guild_id, "Role", desc, str(interaction.user))
 
 
@@ -7823,7 +7833,7 @@ async def modstats_cmd(interaction: discord.Interaction):
 
     if not conteo:
         embed = build_embed(title="📈 Sin datos", description="Todavía no hay acciones registradas en los logs.", color=COLOR_WARN)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     top = conteo.most_common(10)
     medallas = ["🥇", "🥈", "🥉"]
@@ -7838,7 +7848,7 @@ async def modstats_cmd(interaction: discord.Interaction):
         color=COLOR_PURPLE,
         footer=f"Basado en los últimos {len(entries)} registros de log"
     )
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 
 @bot.tree.command(name="antilink", description="🔗 Activa o desactiva el borrado automático de links.")
@@ -7856,7 +7866,7 @@ async def antilink_cmd(interaction: discord.Interaction, estado: app_commands.Ch
 
     desc = "Ahora se eliminarán automáticamente los mensajes con links de usuarios sin permisos de gestión de mensajes." if cfg["antilink_enabled"] else "El borrado automático de links fue desactivado."
     embed = build_embed(title="🔗 Antilink actualizado", description=desc, color=Config.COLOR_SUCCESS)
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="antispam", description="🚫 Activa o desactiva la protección antispam.")
@@ -7874,7 +7884,7 @@ async def antispam_cmd(interaction: discord.Interaction, estado: app_commands.Ch
 
     desc = "Ahora se detectará y silenciará automáticamente a quien mande mensajes repetidos muy rápido (5 en 5s)." if cfg["antispam_enabled"] else "La protección antispam fue desactivada."
     embed = build_embed(title="🚫 Antispam actualizado", description=desc, color=Config.COLOR_SUCCESS)
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -7947,15 +7957,15 @@ class DMModal(discord.ui.Modal):
 @app_commands.describe(usuario="Usuario al que enviarle el DM")
 @app_commands.checks.has_permissions(moderate_members=True)
 async def dm_cmd(interaction: discord.Interaction, usuario: discord.Member):
-    track_command(interaction.guild_id, "dm")
+    schedule_music_log(track_command, interaction.guild_id, "dm")
 
     if usuario.bot:
         embed = build_embed(title="❌ Error", description="No puedes enviarle un DM a un bot.", color=COLOR_WARN)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     async def send_single(modal_interaction: discord.Interaction, embed: discord.Embed):
         try:
-            await usuario.send(embed=embed)
+            await send_styled(usuario.send, embed=embed)
             confirm = build_embed(
                 title="✅ Mensaje enviado",
                 description=f"Se envió el DM correctamente a {usuario.mention}.",
@@ -7972,7 +7982,7 @@ async def dm_cmd(interaction: discord.Interaction, usuario: discord.Member):
                 description=f"{usuario.mention} tiene los DMs cerrados o bloqueó al bot.",
                 color=COLOR_WARN
             )
-        await modal_interaction.response.send_message(embed=confirm, ephemeral=True)
+        await send_styled(modal_interaction.response.send_message, embed=confirm, ephemeral=True)
 
     modal = DMModal(usuario.display_name, send_single)
     await interaction.response.send_modal(modal)
@@ -7982,15 +7992,15 @@ async def dm_cmd(interaction: discord.Interaction, usuario: discord.Member):
 @app_commands.describe(rol="Rol al que enviarle el mensaje")
 @app_commands.checks.has_permissions(administrator=True)
 async def dm_masivo_cmd(interaction: discord.Interaction, rol: discord.Role):
-    track_command(interaction.guild_id, "dm-masivo")
+    schedule_music_log(track_command, interaction.guild_id, "dm-masivo")
 
     miembros = [m for m in rol.members if not m.bot]
     if not miembros:
         embed = build_embed(title="❌ Rol vacío", description=f"El rol {rol.mention} no tiene miembros a los que enviar mensajes.", color=COLOR_WARN)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     async def send_bulk(modal_interaction: discord.Interaction, embed: discord.Embed):
-        await modal_interaction.response.send_message(
+        await send_styled(modal_interaction.response.send_message, 
             embed=build_embed(
                 title="📨 Enviando mensajes...",
                 description=f"Enviando a **{len(miembros)}** miembro(s) con el rol {rol.mention}. Esto puede tardar un poco.",
@@ -8002,7 +8012,7 @@ async def dm_masivo_cmd(interaction: discord.Interaction, rol: discord.Role):
         enviados, fallidos = 0, 0
         for miembro in miembros:
             try:
-                await miembro.send(embed=embed)
+                await send_styled(miembro.send, embed=embed)
                 enviados += 1
             except:
                 fallidos += 1
@@ -8017,7 +8027,7 @@ async def dm_masivo_cmd(interaction: discord.Interaction, rol: discord.Role):
                 ("🚫 Fallidos (DMs cerrados)", str(fallidos), True),
             ]
         )
-        await modal_interaction.followup.send(embed=resumen, ephemeral=True)
+        await send_styled(modal_interaction.followup.send, embed=resumen, ephemeral=True)
         record_log(
             interaction.guild_id, "moderacion",
             f"{interaction.user} envió un DM masivo al rol {rol.name}: {embed.title} ({enviados} enviados, {fallidos} fallidos)",
@@ -8034,7 +8044,7 @@ async def purge_messages(interaction: discord.Interaction, cantidad: app_command
     await interaction.response.defer(ephemeral=True)
     deleted = await interaction.channel.purge(limit=cantidad)
     embed = build_embed(title="Chat Limpiado", description=f"Se eliminaron **{len(deleted)}** mensajes.", color=Config.COLOR_SUCCESS)
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
     record_log(interaction.guild_id, "Purge", f"Borrados {len(deleted)} mensajes en #{interaction.channel.name}", str(interaction.user))
 
 @bot.tree.command(name="lock", description="🔒 Bloquea el canal actual para usuarios normales.")
@@ -8043,7 +8053,7 @@ async def lock_channel(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True)
     await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)
     embed = build_embed(title="Canal Bloqueado", description="Este canal ha sido bloqueado por moderación. 🥀", color=Config.COLOR_ERROR)
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
     record_log(interaction.guild_id, "Lock", f"Canal #{interaction.channel.name} bloqueado", str(interaction.user))
 
 @bot.tree.command(name="unlock", description="🔓 Desbloquea el canal actual.")
@@ -8052,7 +8062,7 @@ async def unlock_channel(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True)
     await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=True)
     embed = build_embed(title="Canal Desbloqueado", description="Este canal ha sido desbloqueado. 🌸", color=Config.COLOR_SUCCESS)
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
     record_log(interaction.guild_id, "Unlock", f"Canal #{interaction.channel.name} desbloqueado", str(interaction.user))
 
 @bot.tree.command(name="canal-trampa", description="🥀 Configura un canal trampa (Honeypot) para banear intrusos.")
@@ -8064,7 +8074,7 @@ async def set_trap_channel(interaction: discord.Interaction, canal: discord.Text
     guild_cfg["trap_channel_id"] = canal.id
     update_guild_config(interaction.guild_id, guild_cfg)
     embed = build_embed(title="Canal Trampa Configurado", description=f"El canal {canal.mention} ahora es una trampa. Cualquier usuario que escriba ahí será baneado. 🥀", color=Config.COLOR_SUCCESS)
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -8077,7 +8087,7 @@ async def recordatorio_cmd(interaction: discord.Interaction, tiempo: str, texto:
     seconds = parse_duration_to_seconds(tiempo)
     if seconds is None or seconds > 7 * 86400:
         embed = build_embed(title="❌ Tiempo inválido", description="Usá un formato como `10m`, `2h`, `1d` (máximo 7 días).", color=COLOR_WARN)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     embed = build_embed(
         title="⏰ Recordatorio guardado",
@@ -8085,7 +8095,7 @@ async def recordatorio_cmd(interaction: discord.Interaction, tiempo: str, texto:
         color=COLOR_OK,
         fields=[("📝 Texto", texto[:200], False)]
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     async def wait_and_remind():
         await asyncio.sleep(seconds)
@@ -8096,10 +8106,10 @@ async def recordatorio_cmd(interaction: discord.Interaction, tiempo: str, texto:
             footer="Pediste que te avisara esto"
         )
         try:
-            await interaction.user.send(embed=recordatorio_embed)
+            await send_styled(interaction.user.send, embed=recordatorio_embed)
         except:
             try:
-                await interaction.channel.send(content=interaction.user.mention, embed=recordatorio_embed)
+                await send_styled(interaction.channel.send, content=interaction.user.mention, embed=recordatorio_embed)
             except:
                 pass
 
@@ -8116,7 +8126,7 @@ async def afk_cmd(interaction: discord.Interaction, razon: str = "Sin especifica
         color=COLOR_MAIN,
         fields=[("Razón", razon, False)]
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="sugerencia", description="💡 Manda una sugerencia al buzón del servidor.")
@@ -8129,7 +8139,7 @@ async def sugerencia_cmd(interaction: discord.Interaction, texto: str):
 
     if not channel:
         embed = build_embed(title="❌ Error", description="No se encontró el canal de sugerencias configurado.", color=COLOR_WARN)
-        return await interaction.followup.send(embed=embed, ephemeral=True)
+        return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
     embed = build_embed(
         title="💡 Nueva sugerencia",
@@ -8139,7 +8149,7 @@ async def sugerencia_cmd(interaction: discord.Interaction, texto: str):
         author_icon=interaction.user.display_avatar.url,
         footer=f"Sugerido por {interaction.user.id}"
     )
-    msg = await channel.send(embed=embed)
+    msg = await send_styled(channel.send, embed=embed)
     try:
         await msg.add_reaction("👍")
         await msg.add_reaction("👎")
@@ -8147,7 +8157,7 @@ async def sugerencia_cmd(interaction: discord.Interaction, texto: str):
         pass
 
     confirm = build_embed(title="✅ Sugerencia enviada", description=f"Tu sugerencia se publicó en {channel.mention}.", color=COLOR_OK)
-    await interaction.followup.send(embed=confirm, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=confirm, ephemeral=True)
     record_log(interaction.guild_id, "moderacion", f"{interaction.user} envió una sugerencia: {texto[:60]}", str(interaction.user))
 
 
@@ -8160,7 +8170,7 @@ async def config_sugerencias_cmd(interaction: discord.Interaction, canal: discor
     cfg["suggestions_channel"] = canal.id
     update_guild_config(interaction.guild_id, cfg)
     embed = build_embed(title="💡 Canal configurado", description=f"Las sugerencias ahora se publican en {canal.mention}.", color=COLOR_OK)
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -8180,7 +8190,7 @@ async def autorole_cmd(interaction: discord.Interaction, rol: discord.Role | Non
         embed = build_embed(title="🎭 Autorole configurado", description=f"Cada nuevo miembro recibirá el rol {rol.mention} automáticamente.", color=COLOR_OK)
     else:
         embed = build_embed(title="🎭 Autorole desactivado", description="Ya no se asignará ningún rol automático.", color=COLOR_WARN)
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -8230,7 +8240,7 @@ class AutoRolePanelView(discord.ui.View):
                     description="Es probable que un administrador lo haya borrado. Avisale a un admin.",
                     color=COLOR_WARN,
                 )
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
+                return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
             if guild.me.top_role <= role and guild.owner_id != guild.me.id:
                 embed = build_embed(
@@ -8238,7 +8248,7 @@ class AutoRolePanelView(discord.ui.View):
                     description=f"El rol {role.mention} está por encima o al mismo nivel que mi rol más alto. Un admin debe subir mi rol en `Configuración del servidor → Roles`.",
                     color=COLOR_WARN,
                 )
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
+                return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
             try:
                 if role in member.roles:
@@ -8255,14 +8265,14 @@ class AutoRolePanelView(discord.ui.View):
                         description=f"¡Listo! Ahora tenés el rol {role.mention}.",
                         color=COLOR_OK,
                     )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
             except discord.Forbidden:
                 embed = build_embed(
                     title="❌ Sin permisos",
                     description="No tengo permisos suficientes para gestionar ese rol.",
                     color=COLOR_WARN,
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
         return callback
 
@@ -8310,7 +8320,7 @@ async def panel_autoroles_cmd(
     rol4: discord.Role | None = None, emoji4: str | None = None,
     rol5: discord.Role | None = None, emoji5: str | None = None,
 ):
-    track_command(interaction.guild_id, "panel-autoroles")
+    schedule_music_log(track_command, interaction.guild_id, "panel-autoroles")
     await interaction.response.defer(ephemeral=True, thinking=True)
     target = canal or interaction.channel
 
@@ -8326,13 +8336,13 @@ async def panel_autoroles_cmd(
                 description=f"El rol {rol.mention} está por encima o al mismo nivel que mi rol más alto. Subí mi rol en la lista de roles del servidor e intentá de nuevo.",
                 color=COLOR_WARN,
             )
-            return await interaction.followup.send(embed=embed, ephemeral=True)
+            return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
         roles_data.append({"role_id": rol.id, "label": rol.name, "emoji": emoji})
         lineas_desc.append(f"{emoji + ' ' if emoji else '🔹 '}{rol.mention}")
 
     if not roles_data:
         embed = build_embed(title="❌ Faltan roles", description="Tenés que indicar al menos un rol (`rol1`).", color=COLOR_WARN)
-        return await interaction.followup.send(embed=embed, ephemeral=True)
+        return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
     embed = nexus_embed(
         title=titulo,
@@ -8347,10 +8357,10 @@ async def panel_autoroles_cmd(
     view = AutoRolePanelView(roles_data)
 
     try:
-        message = await target.send(embed=embed, view=view)
+        message = await send_styled(target.send, embed=embed, view=view)
     except discord.Forbidden:
         embed = build_embed(title="❌ Sin permisos", description=f"No tengo permisos para enviar mensajes en {target.mention}.", color=COLOR_WARN)
-        return await interaction.followup.send(embed=embed, ephemeral=True)
+        return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
     cfg = get_guild_config(interaction.guild_id)
     cfg.setdefault("autorole_panels", []).append({
@@ -8365,14 +8375,14 @@ async def panel_autoroles_cmd(
         description=f"El panel de autoroles se publicó en {target.mention} con {len(roles_data)} rol(es).",
         color=COLOR_OK,
     )
-    await interaction.followup.send(embed=confirm, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=confirm, ephemeral=True)
 
 
 @bot.tree.command(name="panel-autoroles-quitar", description="[Admin] Elimina un panel de autoroles guardado (no borra el mensaje).")
 @app_commands.describe(message_id="ID del mensaje del panel (click derecho → Copiar ID)")
 @app_commands.checks.has_permissions(administrator=True)
 async def panel_autoroles_quitar_cmd(interaction: discord.Interaction, message_id: str):
-    track_command(interaction.guild_id, "panel-autoroles-quitar")
+    schedule_music_log(track_command, interaction.guild_id, "panel-autoroles-quitar")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     panels = cfg.get("autorole_panels") or []
@@ -8380,17 +8390,17 @@ async def panel_autoroles_quitar_cmd(interaction: discord.Interaction, message_i
         target_id = int(message_id)
     except ValueError:
         embed = build_embed(title="❌ ID inválido", description="El `message_id` debe ser un número.", color=COLOR_WARN)
-        return await interaction.followup.send(embed=embed, ephemeral=True)
+        return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
     nuevos = [p for p in panels if p.get("message_id") != target_id]
     if len(nuevos) == len(panels):
         embed = build_embed(title="❌ No encontrado", description="No hay ningún panel guardado con ese `message_id`.", color=COLOR_WARN)
-        return await interaction.followup.send(embed=embed, ephemeral=True)
+        return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
     cfg["autorole_panels"] = nuevos
     update_guild_config(interaction.guild_id, cfg)
     embed = build_embed(title="🗑️ Panel eliminado", description="Se eliminó de la configuración. Los botones dejarán de funcionar en el mensaje original después del próximo reinicio del bot (o podés borrar el mensaje manualmente).", color=COLOR_OK)
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -8458,7 +8468,7 @@ async def giveaway_cmd(interaction: discord.Interaction, premio: str, duracion: 
     seconds = parse_duration_to_seconds(duracion)
     if seconds is None or seconds > 30 * 86400:
         embed = build_embed(title="❌ Duración inválida", description="Usá un formato como `10m`, `1h`, `1d` (máx. 30 días).", color=COLOR_WARN)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
     view = GiveawayView(premio, ganadores, interaction.user.id)
     ends_at = datetime.now(timezone.utc) + timedelta(seconds=seconds)
@@ -8473,7 +8483,7 @@ async def giveaway_cmd(interaction: discord.Interaction, premio: str, duracion: 
         ],
         footer=f"Organizado por {interaction.user.display_name}"
     )
-    await interaction.response.send_message(embed=embed, view=view)
+    await send_styled(interaction.response.send_message, embed=embed, view=view)
     message = await interaction.original_response()
 
     record_log(interaction.guild_id, "moderacion", f"{interaction.user} inició un sorteo: {premio}", str(interaction.user))
@@ -8514,7 +8524,7 @@ class MathCaptchaModal(discord.ui.Modal):
                 description="Volvé a hacer clic en **Verificarme** para intentar de nuevo.",
                 color=COLOR_WARN
             )
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
         cfg = get_guild_config(interaction.guild_id)
         ok = await apply_verification(interaction.user, cfg)
@@ -8523,7 +8533,7 @@ class MathCaptchaModal(discord.ui.Modal):
             record_log(interaction.guild_id, "moderacion", f"{interaction.user} se verificó (nivel 1)", str(interaction.user))
         else:
             embed = build_embed(title="⚠️ Verificado, pero...", description="No pude asignarte el rol automáticamente. Avisale a un admin.", color=COLOR_WARN)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 class TextCaptchaModal(discord.ui.Modal):
@@ -8545,12 +8555,12 @@ class TextCaptchaModal(discord.ui.Modal):
 
         if not pending or pending["guild_id"] != interaction.guild_id:
             embed = build_embed(title="❌ Captcha expirado", description="Volvé a hacer clic en **Verificarme** para generar uno nuevo.", color=COLOR_WARN)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
         if datetime.now(timezone.utc) > pending["expires"]:
             del pending_captchas[interaction.user.id]
             embed = build_embed(title="⏰ Captcha expirado", description="Se venció el tiempo. Hacé clic en **Verificarme** para generar uno nuevo.", color=COLOR_WARN)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
         if self.codigo.value.strip().upper() != pending["code"]:
             pending["attempts"] += 1
@@ -8569,7 +8579,7 @@ class TextCaptchaModal(discord.ui.Modal):
                     description=f"Te quedan **{restantes}** intento(s). Volvé a hacer clic en **Ingresar código**.",
                     color=COLOR_WARN
                 )
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
         # Correcto
         del pending_captchas[interaction.user.id]
@@ -8580,7 +8590,7 @@ class TextCaptchaModal(discord.ui.Modal):
             record_log(interaction.guild_id, "moderacion", f"{interaction.user} se verificó (nivel {cfg.get('verify_level', 2)})", str(interaction.user))
         else:
             embed = build_embed(title="⚠️ Verificado, pero...", description="No pude asignarte el rol automáticamente. Avisale a un admin.", color=COLOR_WARN)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 class CaptchaAnswerView(discord.ui.View):
@@ -8606,12 +8616,12 @@ class VerifyPanelView(discord.ui.View):
 
         if not cfg.get("verify_enabled"):
             embed = build_embed(title="❌ Verificación desactivada", description="La verificación no está activa en este servidor.", color=COLOR_WARN)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
         verified_role = interaction.guild.get_role(int(cfg["verify_role_id"])) if cfg.get("verify_role_id") else None
         if verified_role and verified_role in interaction.user.roles:
             embed = build_embed(title="✅ Ya estás verificado", description="No necesitás hacer nada más.", color=COLOR_OK)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
         level = int(cfg.get("verify_level", 1))
 
@@ -8637,7 +8647,7 @@ class VerifyPanelView(discord.ui.View):
             color=COLOR_MAIN,
             image="attachment://captcha.png"
         )
-        await interaction.response.send_message(embed=embed, file=file, view=CaptchaAnswerView(), ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=embed, file=file, view=CaptchaAnswerView(), ephemeral=True)
 
 
 @bot.tree.command(name="config-verificacion", description="[Admin] Configura el sistema de verificación con captcha.")
@@ -8680,7 +8690,7 @@ async def config_verificacion_cmd(
             ("🎯 Nivel", nivel.name, True),
         ]
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="panel-verificacion", description="[Admin] Publica el panel con el botón de verificación.")
@@ -8691,7 +8701,7 @@ async def panel_verificacion_cmd(interaction: discord.Interaction, canal: discor
     cfg = get_guild_config(interaction.guild_id)
     if not cfg.get("verify_enabled"):
         embed = build_embed(title="❌ Falta configurar", description="Primero corré `/config-verificacion` para configurar los roles y el nivel.", color=COLOR_WARN)
-        return await interaction.followup.send(embed=embed, ephemeral=True)
+        return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
     target = canal or interaction.channel
     nivel = cfg.get("verify_level", 1)
@@ -8706,10 +8716,10 @@ async def panel_verificacion_cmd(interaction: discord.Interaction, canal: discor
         color=COLOR_MAIN,
         thumbnail=interaction.guild.icon.url if interaction.guild.icon else None
     )
-    await target.send(embed=embed, view=VerifyPanelView())
+    await send_styled(target.send, embed=embed, view=VerifyPanelView())
 
     confirm = build_embed(title="✅ Panel publicado", description=f"El panel de verificación se publicó en {target.mention}.", color=COLOR_OK)
-    await interaction.followup.send(embed=confirm, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=confirm, ephemeral=True)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -8719,7 +8729,7 @@ async def panel_verificacion_cmd(interaction: discord.Interaction, canal: discor
 @bot.tree.command(name="roleinfo", description="🎭 Muestra información detallada de un rol.")
 @app_commands.describe(rol="El rol a consultar")
 async def roleinfo_cmd(interaction: discord.Interaction, rol: discord.Role):
-    track_command(interaction.guild_id, "roleinfo")
+    schedule_music_log(track_command, interaction.guild_id, "roleinfo")
 
     permisos_clave = []
     perms = rol.permissions
@@ -8755,12 +8765,12 @@ async def roleinfo_cmd(interaction: discord.Interaction, rol: discord.Role):
         inline=False,
     )
     embed.set_footer(text=BOT_FOOTER_TEXT)
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 
 @nexus_group.command(name="botinfo", description="🤖 Muestra el estado técnico del bot.")
 async def botinfo_cmd(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "botinfo")
+    schedule_music_log(track_command, interaction.guild_id, "botinfo")
 
     uptime = format_uptime(time.time() - BOT_START_TIME)
     latencia = round(bot.latency * 1000)
@@ -8783,7 +8793,7 @@ async def botinfo_cmd(interaction: discord.Interaction):
     embed.add_field(name="🗄️ Base de datos", value="✅ Supabase" if supabase and supabase.healthy else ("⚠️ Supabase no disponible" if supabase else "📁 Archivos locales"), inline=True)
     embed.add_field(name="🎶 Reproduciendo música en", value=f"{sum(1 for s in music_states.values() if s.is_playing())} servidor(es)", inline=True)
     embed.set_footer(text=BOT_FOOTER_TEXT)
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 
 @bot.tree.command(name="purge-usuario", description="[Mod] Elimina los últimos mensajes de un usuario específico en este canal.")
@@ -8793,7 +8803,7 @@ async def botinfo_cmd(interaction: discord.Interaction):
 )
 @app_commands.checks.has_permissions(manage_messages=True)
 async def purge_usuario_cmd(interaction: discord.Interaction, usuario: discord.Member, cantidad: app_commands.Range[int, 1, 200] = 100):
-    track_command(interaction.guild_id, "purge-usuario")
+    schedule_music_log(track_command, interaction.guild_id, "purge-usuario")
     await interaction.response.defer(ephemeral=True, thinking=True)
 
     def check(m: discord.Message) -> bool:
@@ -8803,14 +8813,14 @@ async def purge_usuario_cmd(interaction: discord.Interaction, usuario: discord.M
         borrados = await interaction.channel.purge(limit=cantidad, check=check)
     except discord.Forbidden:
         embed = build_embed(title="❌ Sin permisos", description="No tengo permisos para borrar mensajes en este canal.", color=COLOR_WARN)
-        return await interaction.followup.send(embed=embed, ephemeral=True)
+        return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
     embed = build_embed(
         title="🧹 Mensajes eliminados",
         description=f"Se eliminaron **{len(borrados)}** mensaje(s) de {usuario.mention} (de los últimos {cantidad} revisados).",
         color=COLOR_OK,
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 # ==========================================================
@@ -8838,7 +8848,7 @@ async def config_niveles_cmd(
     xp_max: app_commands.Range[int, 1, 1000] | None = None,
     cooldown: app_commands.Range[int, 0, 3600] | None = None,
 ):
-    track_command(interaction.guild_id, "config-niveles")
+    schedule_music_log(track_command, interaction.guild_id, "config-niveles")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
 
@@ -8871,14 +8881,14 @@ async def config_niveles_cmd(
             ("Cooldown", f"{cfg.get('level_cooldown', 60)}s", True),
         ],
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="config-niveles-canal-excluir", description="[Admin] Excluye o vuelve a incluir un canal del sistema de XP.")
 @app_commands.describe(canal="Canal a excluir/incluir de la ganancia de XP")
 @app_commands.checks.has_permissions(administrator=True)
 async def config_niveles_canal_excluir_cmd(interaction: discord.Interaction, canal: discord.TextChannel):
-    track_command(interaction.guild_id, "config-niveles-canal-excluir")
+    schedule_music_log(track_command, interaction.guild_id, "config-niveles-canal-excluir")
     await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = get_guild_config(interaction.guild_id)
     excluidos = cfg.setdefault("level_no_xp_channels", [])
@@ -8896,13 +8906,13 @@ async def config_niveles_canal_excluir_cmd(interaction: discord.Interaction, can
         description=f"El canal {canal.mention} ahora **{accion}**.",
         color=COLOR_OK,
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="nivel", description="🏆 Muestra tu nivel y XP (o el de otro usuario).")
 @app_commands.describe(usuario="Usuario a consultar (por defecto vos)")
 async def nivel_cmd(interaction: discord.Interaction, usuario: discord.Member | None = None):
-    track_command(interaction.guild_id, "nivel")
+    schedule_music_log(track_command, interaction.guild_id, "nivel")
     objetivo = usuario or interaction.user
     data = get_user_level_data(interaction.guild_id, objetivo.id)
 
@@ -8925,12 +8935,12 @@ async def nivel_cmd(interaction: discord.Interaction, usuario: discord.Member | 
             ("Para el próximo nivel", f"Faltan **{faltan}** XP", False),
         ],
     )
-    await interaction.response.send_message(embed=embed)
+    await send_styled(interaction.response.send_message, embed=embed)
 
 
 @bot.tree.command(name="ranking-niveles", description="📊 Muestra el top de usuarios con más nivel/XP del servidor.")
 async def ranking_niveles_cmd(interaction: discord.Interaction):
-    track_command(interaction.guild_id, "ranking-niveles")
+    schedule_music_log(track_command, interaction.guild_id, "ranking-niveles")
     await interaction.response.defer()
 
     ranking = get_guild_ranking(interaction.guild_id, top=10)
@@ -8940,7 +8950,7 @@ async def ranking_niveles_cmd(interaction: discord.Interaction):
             description="Todavía no hay nadie con XP en este servidor.",
             color=COLOR_WARN,
         )
-        return await interaction.followup.send(embed=embed)
+        return await send_styled(interaction.followup.send, embed=embed)
 
     medallas = ["🥇", "🥈", "🥉"]
     lineas = []
@@ -8956,14 +8966,14 @@ async def ranking_niveles_cmd(interaction: discord.Interaction):
         color=COLOR_PURPLE,
         footer="Nexus Levels",
     )
-    await interaction.followup.send(embed=embed)
+    await send_styled(interaction.followup.send, embed=embed)
 
 
 @bot.tree.command(name="nivel-set", description="[Admin] Setea manualmente la XP de un usuario.")
 @app_commands.describe(usuario="Usuario a modificar", xp="XP total a asignar")
 @app_commands.checks.has_permissions(administrator=True)
 async def nivel_set_cmd(interaction: discord.Interaction, usuario: discord.Member, xp: app_commands.Range[int, 0, 10_000_000]):
-    track_command(interaction.guild_id, "nivel-set")
+    schedule_music_log(track_command, interaction.guild_id, "nivel-set")
     nuevo_nivel = set_user_level_data(interaction.guild_id, usuario.id, xp)
 
     embed = build_embed(
@@ -8971,7 +8981,7 @@ async def nivel_set_cmd(interaction: discord.Interaction, usuario: discord.Membe
         description=f"{usuario.mention} ahora tiene **{xp} XP** (nivel **{nuevo_nivel}**).",
         color=COLOR_OK,
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
 
 app = Flask(__name__)
@@ -9066,6 +9076,9 @@ KeysPanelView = setup_keys_system(
 
 HELP_CATEGORIES["studio"] = {"label": "✨ Studio y herramientas", "description": "Diseño, invitaciones y nuevas utilidades.", "commands": [("/embed", "Editor visual de embeds con vista previa."), ("/nexus invitar", "Enlace para añadir el bot."), ("/nexus comandos", "Busca cualquier comando por nombre."), ("/nexus musica-estado", "Diagnóstico de la sesión."), ("/nexus cola-limpiar", "Limpia las canciones pendientes.")]}
 setup_ui(bot, build_embed, get_music_state, nexus_group)
+from nexus_updates import setup_updates
+setup_updates(bot, build_embed, config_group, supabase)
+HELP_CATEGORIES["updates"] = {"label": "NexusMusic · APK", "description": "Versiones y portales oficiales", "commands": [("/config canal-ac", "Canal de avisos de nuevas APK"), ("/config sticker-ac", "Sticker del servidor para avisos"), ("/nexusmusic version", "Historial de versiones y descargas"), ("/info nexusmusic", "Versión y SHA-256 publicados"), ("/web", "Portales oficiales")]}
 
 if __name__ == "__main__":
     if not TOKEN:

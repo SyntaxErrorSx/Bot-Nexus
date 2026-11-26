@@ -36,11 +36,11 @@ class Config:
     NEXUS_PLUS_ROLE_NAME = "Nexus+"
     
     # Colores para embeds (Azul y blanquito suave)
-    COLOR_SUCCESS = 0x87CEFA  # Azul cielo claro
-    COLOR_ERROR = 0xFF9999    # Rojo suave
+    COLOR_SUCCESS = 0x20C997  # Azul cielo claro
+    COLOR_ERROR = 0xEF5675    # Rojo suave
     COLOR_INFO = 0xFFFFFF     # Blanco puro
     COLOR_WARNING = 0xFFE5B4  # Naranja/Durazno suave
-    COLOR_NEXUS = 0xB0C4DE    # Azul acero claro (Soft blue)
+    COLOR_NEXUS = 0xD92138    # Azul acero claro (Soft blue)
     
     # Validación
     @classmethod

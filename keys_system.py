@@ -1,3 +1,4 @@
+from nexus_ui import send_styled
 import os
 import random
 import string
@@ -180,7 +181,7 @@ class EmailModal(discord.ui.Modal, title="Solicitar Key — NEXUS STUDIOS"):
         email = self.correo.value.strip()
         if "@" not in email or "." not in email:
             embed = self.build_embed(title="❌ Correo inválido", description="Escribí un correo válido e intentá de nuevo.", color=self.colors["WARN"])
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
@@ -192,13 +193,13 @@ class EmailModal(discord.ui.Modal, title="Solicitar Key — NEXUS STUDIOS"):
                 color=self.colors["WARN"],
                 footer=self.footer_text,
             )
-            return await interaction.followup.send(embed=embed, ephemeral=True)
+            return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
         try:
             key = create_license(email, self.duration_days)
         except Exception as e:
             embed = self.build_embed(title="❌ Error generando la key", description=f"No se pudo crear la licencia: `{e}`", color=self.colors["WARN"], footer=self.footer_text)
-            return await interaction.followup.send(embed=embed, ephemeral=True)
+            return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
         emailed = send_key_email(email, interaction.user.display_name, key, self.duration_days)
 
@@ -212,7 +213,7 @@ class EmailModal(discord.ui.Modal, title="Solicitar Key — NEXUS STUDIOS"):
             color=self.colors["OK"],
             footer=self.footer_text,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
         # DM adicional (además del correo)
         try:
@@ -222,7 +223,7 @@ class EmailModal(discord.ui.Modal, title="Solicitar Key — NEXUS STUDIOS"):
                 color=self.colors["OK"],
                 footer=self.footer_text,
             )
-            await interaction.user.send(embed=dm_embed)
+            await send_styled(interaction.user.send, embed=dm_embed)
         except discord.Forbidden:
             pass  # el usuario tiene los DMs cerrados, no pasa nada
 
@@ -284,7 +285,7 @@ def build_keys_panel_view(config_getter, build_embed, colors: dict, footer_text:
                     footer=footer_text,
                 )
                 view = DurationSelectView(build_embed, colors, footer_text, supabase_get, supabase_set)
-                return await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+                return await send_styled(interaction.response.send_message, embed=embed, view=view, ephemeral=True)
 
             # Todo el resto (usuarios normales e Insiders): 5 días fijos
             await interaction.response.send_modal(
@@ -322,14 +323,14 @@ def setup_keys_system(bot, Config, build_embed, colors: dict, footer_text: str, 
     async def generar_key_cmd(interaction: discord.Interaction, correo: str, nombre: str, dias: app_commands.Range[int, 1, 365] = 30):
         if "@" not in correo or "." not in correo:
             embed = build_embed(title="❌ Correo inválido", description="Escribí un correo válido.", color=colors["WARN"])
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             key = create_license(correo, dias)
         except Exception as e:
             embed = build_embed(title="❌ Error", description=f"No se pudo generar la key: `{e}`", color=colors["WARN"], footer=footer_text)
-            return await interaction.followup.send(embed=embed, ephemeral=True)
+            return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
         # ❌ NO SE ENVÍA CORREO (solo se genera la key)
         embed = build_embed(
@@ -344,7 +345,7 @@ def setup_keys_system(bot, Config, build_embed, colors: dict, footer_text: str, 
             color=colors["OK"],
             footer=footer_text,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
     @bot.tree.command(name="ver-keys", description="[Admin] Muestra todas las keys generadas.")
     @app_commands.checks.has_permissions(administrator=True)
@@ -352,7 +353,7 @@ def setup_keys_system(bot, Config, build_embed, colors: dict, footer_text: str, 
         """Muestra un listado de todas las keys generadas."""
         if not _licenses_configured():
             embed = build_embed(title="❌ Error", description="Supabase no está configurado.", color=colors["WARN"])
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            return await send_styled(interaction.response.send_message, embed=embed, ephemeral=True)
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
@@ -363,11 +364,11 @@ def setup_keys_system(bot, Config, build_embed, colors: dict, footer_text: str, 
             keys = r.json() if isinstance(r.json(), list) else []
         except Exception as e:
             embed = build_embed(title="❌ Error", description=f"No se pudieron obtener las keys: `{e}`", color=colors["WARN"])
-            return await interaction.followup.send(embed=embed, ephemeral=True)
+            return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
         if not keys:
             embed = build_embed(title="📋 Keys generadas", description="No hay keys registradas aún.", color=colors["MAIN"])
-            return await interaction.followup.send(embed=embed, ephemeral=True)
+            return await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
         # Mostrar últimas 25 keys
         lines = []
@@ -387,7 +388,7 @@ def setup_keys_system(bot, Config, build_embed, colors: dict, footer_text: str, 
             color=colors["MAIN"],
             footer=f"Mostrando últimas 25 keys · {len(keys)} total"
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await send_styled(interaction.followup.send, embed=embed, ephemeral=True)
 
     @bot.tree.command(name="panel-keys", description="[Admin] Publica el panel de auto-pedido de keys.")
     @app_commands.describe(canal="Canal donde publicar el panel (por defecto el canal actual)")
@@ -406,9 +407,9 @@ def setup_keys_system(bot, Config, build_embed, colors: dict, footer_text: str, 
             color=colors["MAIN"],
             footer=footer_text,
         )
-        await target.send(embed=embed, view=KeysPanelView())
+        await send_styled(target.send, embed=embed, view=KeysPanelView())
 
         confirm = build_embed(title="✅ Panel publicado", description=f"El panel de keys se publicó en {target.mention}.", color=colors["OK"])
-        await interaction.response.send_message(embed=confirm, ephemeral=True)
+        await send_styled(interaction.response.send_message, embed=confirm, ephemeral=True)
 
     return KeysPanelView
