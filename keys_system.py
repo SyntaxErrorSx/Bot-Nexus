@@ -9,13 +9,15 @@ from email.mime.multipart import MIMEMultipart
 import discord
 from discord import app_commands
 import requests
+from dotenv import load_dotenv
+from nexus_supabase import SUPABASE_URL, configured as supabase_configured, secret_headers
+
+load_dotenv()
 
 # ──────────────────────────────────────────────────────────────
 #  CONFIG / CREDENCIALES (todas desde variables de entorno)
 # ──────────────────────────────────────────────────────────────
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").replace("/rest/v1", "").rstrip("/")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 EMAIL_SENDER = os.getenv("EMAIL_SENDER", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
@@ -31,16 +33,11 @@ COOLDOWN_TABLE = "key_cooldowns"
 
 
 def _licenses_configured() -> bool:
-    return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+    return supabase_configured()
 
 
 def _service_headers() -> dict:
-    return {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
+    return secret_headers()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -54,10 +51,10 @@ def _generate_key_code() -> str:
 
 
 def create_license(email: str, duration_days: int) -> str:
-    """Crea la licencia en Supabase (vía service role key) y devuelve la key generada."""
+    """Crea la licencia en Supabase (vía la nueva clave secreta) y devuelve la key generada."""
     if not _licenses_configured():
         raise RuntimeError(
-            "Faltan SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY en las variables de entorno."
+            "Faltan SUPABASE_URL / SUPABASE_SECRET_KEY en las variables de entorno."
         )
 
     new_key = _generate_key_code()
@@ -70,8 +67,9 @@ def create_license(email: str, duration_days: int) -> str:
         "is_active": True,
         "duration_days": duration_days,
     }
-    r = requests.post(f"{SUPABASE_URL}/rest/v1/{KEYS_TABLE}", headers=_service_headers(), json=payload, timeout=15)
-    r.raise_for_status()
+    r = requests.post(f"{SUPABASE_URL}/rest/v1/{KEYS_TABLE}", headers=_service_headers(), json=payload, timeout=15, allow_redirects=False)
+    if not 200 <= r.status_code < 300:
+        raise RuntimeError(f"Supabase HTTP {r.status_code}: no se pudo crear la licencia.")
     return new_key
 
 
@@ -359,8 +357,9 @@ def setup_keys_system(bot, Config, build_embed, colors: dict, footer_text: str, 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         try:
-            r = requests.get(f"{SUPABASE_URL}/rest/v1/{KEYS_TABLE}", headers=_service_headers(), timeout=15)
-            r.raise_for_status()
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/{KEYS_TABLE}", headers=_service_headers(), timeout=15, allow_redirects=False)
+            if not 200 <= r.status_code < 300:
+                raise RuntimeError(f"Supabase HTTP {r.status_code}: no se pudieron consultar las licencias.")
             keys = r.json() if isinstance(r.json(), list) else []
         except Exception as e:
             embed = build_embed(title="❌ Error", description=f"No se pudieron obtener las keys: `{e}`", color=colors["WARN"])

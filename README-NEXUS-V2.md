@@ -31,3 +31,9 @@ Al añadir el bot a un servidor (`on_guild_join`), se intenta enviar un único m
 ## Comprobaciones
 
 Se verificó sintaxis de todos los Python, recuento de comandos raíz y validez de los GIF. No se pudo ejecutar una sesión real de Discord, instalar sus dependencias en el entorno de revisión ni medir el tiempo real de YouTube. Los módulos que ya estaban deshabilitados (como moderación extra) permanecen deshabilitados. Prueba el bot en un servidor de test antes de desplegar a producción.
+
+## Migración de Supabase (V2.1)
+
+El bot usa la Data API por HTTPS con `apikey: sb_secret_...`, sin JWT legacy ni cabecera Authorization con una clave opaca. Configura `SUPABASE_URL` y `SUPABASE_SECRET_KEY` en el `.env` local o en Render. `SUPABASE_PUBLISHABLE_KEY` es opcional y no participa en las consultas privilegiadas del bot. Borra las variables antiguas de tu configuración si ya no las utilizan otras aplicaciones. Nunca subas una clave secreta a Git. Si fue compartida, crea otra y revoca la anterior.
+
+Al iniciar se comprueba una lectura de `config.id`. Si falla, el cliente permanece disponible para intentos posteriores y se conserva el mecanismo de archivos locales existente. La migración no modifica tablas, políticas RLS ni datos. La clave secreta tiene privilegios elevados: úsala exclusivamente en el servidor. Si el proyecto está pausado o su dominio no resuelve, reanúdalo o revisa el DNS; el cambio de clave por sí solo no corrige problemas DNS.

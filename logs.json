@@ -23,6 +23,36 @@
       "descripcion": "CommandInvokeError: Command 'panel-keys' raised an exception: HTTPException: 400 Bad Request (error code: 40060): Interaction has already been acknowledged.",
       "autor": "_nyx_uk",
       "timestamp": "2026-08-20T15:41:32.878154+00:00"
+    },
+    {
+      "tipo": "editados",
+      "descripcion": "Mensaje editado en #├・🚨・vaucher",
+      "autor": "_nyx_uk",
+      "timestamp": "2026-11-26T19:03:06.684860+00:00"
+    },
+    {
+      "tipo": "borrados",
+      "descripcion": "Mensaje eliminado en #├・🚨・vaucher",
+      "autor": "_nyx_uk",
+      "timestamp": "2026-11-26T19:03:15.194866+00:00"
+    },
+    {
+      "tipo": "borrados",
+      "descripcion": "Mensaje eliminado en #╭・🌺・general",
+      "autor": "sarita02341",
+      "timestamp": "2026-11-26T19:08:09.350337+00:00"
+    },
+    {
+      "tipo": "borrados",
+      "descripcion": "Mensaje eliminado en #╭・🌺・general",
+      "autor": "sarita02341",
+      "timestamp": "2026-11-26T19:08:45.495031+00:00"
+    },
+    {
+      "tipo": "moderacion",
+      "descripcion": "Antilink: mensaje de sarita02341 eliminado (contenía un link)",
+      "autor": "Sistema",
+      "timestamp": "2026-11-26T19:08:47.384814+00:00"
     }
   ]
 }

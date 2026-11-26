@@ -1,25 +1,131 @@
 {
   "1518751703019552948": {
+    "autorole_id": 1522643354507149300,
     "current_link": "https://github.com/santhiagocaro05-debug/NEXUS-INSTALLER/releases/download/installer2/Nexus-Setup-3.0.4.exe",
     "log_channels": {
-      "enlace": 1522649063609204907,
-      "borrados": 1522649063609204907,
+      "enlace": 1522649063609205000,
+      "borrados": 1522649063609205000,
       "editados": 1522649063609204907,
-      "moderacion": 1527415103073292390,
-      "bienvenidas": 1522649063609204907,
-      "aceptaciones": 1522649063609204907
+      "moderacion": 1527415103073292300,
+      "bienvenidas": 1522649063609205000,
+      "aceptaciones": 1522649063609205000
     },
     "roles_enlace": [
       1522080359230210000,
       1522080299637276700
     ],
+    "verify_level": 2,
+    "verify_enabled": true,
+    "verify_role_id": 1522080195190722600,
     "welcome_banner": "https://media.discordapp.net/attachments/1526996602516930621/1534628586580086985/6wsbv03.png?ex=6a74d1bf&is=6a73803f&hm=cd66577f07fae6974b55c4cf4aa550007b92a8facef878930392213df3555038&=&format=webp&quality=lossless&width=512&height=205",
+    "autorole_panels": [
+      {
+        "roles": [
+          {
+            "emoji": null,
+            "label": "standar",
+            "role_id": 1522080512930349300
+          }
+        ],
+        "channel_id": 1539001993778045000,
+        "message_id": 1539007558759751700
+      },
+      {
+        "roles": [
+          {
+            "emoji": "<:Fuck_you:1539330847780634654>",
+            "label": "standar",
+            "role_id": 1522080512930349300
+          }
+        ],
+        "channel_id": 1539001993778045000,
+        "message_id": 1539776058977558500
+      },
+      {
+        "roles": [
+          {
+            "emoji": "<:Fuck_you:1539330847780634654>",
+            "label": "standar",
+            "role_id": 1522080512930349300
+          },
+          {
+            "emoji": "<a:CUERV:1539825072573907005>",
+            "label": "Hombre",
+            "role_id": 1539825741498163200
+          },
+          {
+            "emoji": "<:dead:1539825418688008233>",
+            "label": "Mujer",
+            "role_id": 1539825789715874000
+          },
+          {
+            "emoji": "<:dummy:1182752877710671913>",
+            "label": "Gay",
+            "role_id": 1539825824503570400
+          }
+        ],
+        "channel_id": 1539001993778045000,
+        "message_id": 1539826238456078300
+      },
+      {
+        "roles": [
+          {
+            "emoji": "<:Fuck_you:1539330847780634654>",
+            "label": "standar",
+            "role_id": 1522080512930349300
+          },
+          {
+            "emoji": "<a:dcp:1539825352845557891>",
+            "label": "Hombre",
+            "role_id": 1539825741498163200
+          },
+          {
+            "emoji": "<:dead:1539825418688008233>",
+            "label": "Mujer",
+            "role_id": 1539825789715874000
+          },
+          {
+            "emoji": "<:iaiaiaaayeyeyeye:1453041931755065404>",
+            "label": "Gay",
+            "role_id": 1539825824503570400
+          }
+        ],
+        "channel_id": 1539001993778045000,
+        "message_id": 1539826750568145000
+      },
+      {
+        "roles": [
+          {
+            "emoji": "<a:6186developerbot:1369313481228161086>",
+            "label": "insiders",
+            "role_id": 1522080359230210000
+          }
+        ],
+        "channel_id": 1539827798506475500,
+        "message_id": 1539828083790450700
+      }
+    ],
     "farewell_banner": null,
-    "welcome_channel": 1518752074538422422,
+    "trap_channel_id": 1538349957025628200,
+    "welcome_channel": 1518752074538422500,
     "welcome_enabled": true,
     "welcome_message": "Bienvenido a **Nexus Studios**, {mention}. A partir de este momento formas parte de una comunidad enfocada en el desarrollo, la innovación y el crecimiento. Te recomendamos leer las reglas del servidor, completar tu configuración inicial y explorar los canales disponibles para acceder a todo el contenido. Nuestro equipo de administración y moderación está disponible para ayudarte si tienes alguna duda o inconveniente. Esperamos que disfrutes tu estancia, participes activamente en la comunidad y formes parte de los próximos proyectos que están por venir. Gracias por unirte a **{server}**. Actualmente somos **{membercount}** miembros. ¡Esperamos verte muy activo!",
+    "antispam_enabled": true,
     "farewell_channel": null,
     "farewell_enabled": false,
-    "farewell_message": "**{username}** ha abandonado el servidor. Ahora somos **{membercount}** miembros. 👋"
+    "farewell_message": "**{username}** ha abandonado el servidor. Ahora somos **{membercount}** miembros. 👋",
+    "dm_welcome_banner": "https://cdn.discordapp.com/attachments/1522648873636724861/1539069310411087912/hm5mn54.gif?ex=6a84f97e&is=6a83a7fe&hm=9d6959c0f94b6cf53cfa89bd1a36a6fed16d65308cedf9a446f70647abb0cf91&",
+    "verify_channel_id": 1518752036630434000,
+    "dm_welcome_enabled": true,
+    "dm_welcome_message": "¡Hola {mention}!  Bienvenido a **{server}**. nos alegra tenerte acá.  Antes de arrancar, dale una leída a las reglas del server para que todo fluya bien. Si tenés alguna duda, cualquiera del staff te ayuda sin drama.  Metete a los canales, sumate a la conversa y disfrutá.  ⚠️ Ojo con las reglas eh, que acá no se anda con vueltas. No la cagues.  — Equipo de Nexus Studios",
+    "verify_unverified_role_id": 1522643354507149300,
+    "antilink_enabled": false,
+    "suggestions_channel": null,
+    "level_enabled": false,
+    "level_channel_id": null,
+    "level_xp_min": 15,
+    "level_xp_max": 25,
+    "level_cooldown": 60,
+    "level_no_xp_channels": []
   }
 }

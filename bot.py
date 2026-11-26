@@ -47,67 +47,36 @@ else:
 #  CONEXIÓN A SUPABASE
 # ──────────────────────────────────────────────────────────────
 
-import os
-from supabase import create_client, Client
+from nexus_supabase import RestClient, configured as supabase_configured
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-supabase: Client | None = None
-if SUPABASE_URL and SUPABASE_KEY:
+supabase: RestClient | None = None
+if supabase_configured():
+    supabase = RestClient()
     try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("✅ Conectado a Supabase")
+        supabase.probe()
+        print("✅ Supabase operativo (consulta real, clave nueva sb_secret_)")
     except Exception as e:
-        print(f"⚠️ Error conectando a Supabase: {e}")
-        supabase = None
+        print(f"⚠️ Supabase no disponible: {e}. Se reintentará en consultas posteriores; se conserva el fallback local.")
 else:
-    print("⚠️ Supabase no configurado. Usando archivos locales.")
+    print("⚠️ Supabase no configurado: usa SUPABASE_URL y SUPABASE_SECRET_KEY (sb_secret_...). Usando archivos locales.")
 
-def supabase_get(guild_id: int, table: str) -> dict | None:
-    """Obtiene datos de Supabase"""
+def supabase_get(guild_id: int | str, table: str):
+    """Lee JSON por guild_id; levels se ordena por su id real."""
     if not supabase:
         return None
     try:
-        result = (
-            supabase.table(table)
-            .select("*")
-            .eq("guild_id", str(guild_id))
-            .order("id", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if result.data and len(result.data) > 0:
-            return result.data[0].get("data", {})
-        return None
+        return supabase.get_guild_data(table, guild_id)
     except Exception as e:
         print(f"❌ Error Supabase GET ({table}): {e}")
         return None
 
-def supabase_set(guild_id: int, table: str, data: dict) -> bool:
-    """Guarda datos en Supabase.
 
-    ✅ FIX: antes usaba upsert({"guild_id":..., "data":...}) sin pasar "id".
-    Como la primary key real de estas tablas es "id" (no "guild_id"), Postgrest
-    resuelve el conflicto de upsert contra "id" — y como nunca mandamos un id,
-    NUNCA hay conflicto, así que cada guardado insertaba una fila NUEVA en vez
-    de actualizar la del guild. supabase_get() sigue leyendo con
-    .eq("guild_id", ...) y se queda con result.data[0], que según el orden que
-    devuelva Postgrest puede ser una fila vieja — por eso "no se guardaba" el
-    progreso (en realidad sí se guardaba, pero en una fila que después no se
-    leía). Ahora: buscamos si ya existe una fila para ese guild_id y hacemos
-    UPDATE puntual por "id"; si no existe, recién ahí hacemos INSERT. Así
-    siempre hay una sola fila por guild en cada tabla.
-    """
+def supabase_set(guild_id: int | str, table: str, data: dict | list) -> bool:
+    """Actualiza el registro del servidor sin depender de un id inexistente."""
     if not supabase:
         return False
     try:
-        existing = supabase.table(table).select("id").eq("guild_id", str(guild_id)).execute()
-        if existing.data and len(existing.data) > 0:
-            row_id = existing.data[0]["id"]
-            supabase.table(table).update({"data": data}).eq("id", row_id).execute()
-        else:
-            supabase.table(table).insert({"guild_id": str(guild_id), "data": data}).execute()
+        supabase.set_guild_data(table, guild_id, data)
         return True
     except Exception as e:
         print(f"❌ Error Supabase SET ({table}): {e}")
@@ -251,7 +220,7 @@ def get_guild_config(guild_id: int) -> dict:
     """
     # Intentar desde Supabase
     data = supabase_get(guild_id, "config")
-    if data:
+    if isinstance(data, dict):
         merged = _deep_merge_defaults(data, DEFAULT_GUILD_CONFIG)
         if merged != data:
             update_guild_config(guild_id, merged)
@@ -341,7 +310,7 @@ def get_guild_stats(guild_id: int) -> dict:
     """Carga estadísticas desde Supabase o archivo local"""
     # Intentar desde Supabase
     data = supabase_get(guild_id, "stats")
-    if data:
+    if data is not None:
         return data
     
     # Fallback a archivo local
@@ -437,7 +406,7 @@ def save_levels(data: dict) -> None:
 def get_guild_levels(guild_id: int) -> dict:
     """dict user_id(str) -> {"xp": int, "level": int, "last_xp_ts": float}"""
     data = supabase_get(guild_id, "levels")
-    if data:
+    if data is not None:
         return data
 
     data = load_levels()
@@ -555,7 +524,7 @@ def save_guild_logs(guild_id: int, entries: list[dict]) -> None:
 def _load_guild_logs_raw(guild_id: int) -> list[dict]:
     """Trae los logs (sin invertir/filtrar) de UN guild, priorizando Supabase."""
     data = supabase_get(guild_id, "logs")
-    if data and isinstance(data, list):
+    if isinstance(data, list):
         return data
     data = load_logs()
     return data.get(str(guild_id), [])
@@ -580,7 +549,7 @@ def get_logs(guild_id: int, tipo: str | None = None) -> list[dict]:
     """Carga logs desde Supabase o archivo local"""
     # Intentar desde Supabase
     data = supabase_get(guild_id, "logs")
-    if data and isinstance(data, list):
+    if isinstance(data, list):
         entries = data
     else:
         # Fallback a archivo local
@@ -599,13 +568,9 @@ def load_muted() -> dict:
     """Carga muteados desde Supabase o archivo local"""
     # Supabase no tiene una tabla específica para muted
     # Usamos una sola fila con guild_id = "all"
-    if supabase:
-        try:
-            result = supabase.table("muted").select("*").eq("guild_id", "all").execute()
-            if result.data and len(result.data) > 0:
-                return result.data[0].get("data", {})
-        except Exception as e:
-            print(f"❌ Error cargando muteados de Supabase: {e}")
+    remote = supabase_get("all", "muted")
+    if remote is not None:
+        return remote
     
     # Fallback a archivo local
     with config_lock:
@@ -620,14 +585,7 @@ def load_muted() -> dict:
 def save_muted(data: dict) -> None:
     """Guarda muteados en Supabase y local"""
     # Guardar en Supabase como JSON
-    if supabase:
-        try:
-            supabase.table("muted").upsert({
-                "guild_id": "all",
-                "data": data
-            }).execute()
-        except Exception as e:
-            print(f"❌ Error guardando muteados en Supabase: {e}")
+    supabase_set("all", "muted", data)
     
     # Guardar en archivo local
     with config_lock:
@@ -639,13 +597,9 @@ def save_muted(data: dict) -> None:
 
 def load_banned_ips() -> dict:
     """Carga IPs baneadas desde Supabase o archivo local"""
-    if supabase:
-        try:
-            result = supabase.table("banned_ips").select("*").eq("guild_id", "all").execute()
-            if result.data and len(result.data) > 0:
-                return result.data[0].get("data", {})
-        except Exception as e:
-            print(f"❌ Error cargando banned_ips de Supabase: {e}")
+    remote = supabase_get("all", "banned_ips")
+    if remote is not None:
+        return remote
     
     with config_lock:
         if not os.path.exists(BANNED_IPS_PATH):
@@ -658,14 +612,7 @@ def load_banned_ips() -> dict:
 
 def save_banned_ips(data: dict) -> None:
     """Guarda IPs baneadas en Supabase y local"""
-    if supabase:
-        try:
-            supabase.table("banned_ips").upsert({
-                "guild_id": "all",
-                "data": data
-            }).execute()
-        except Exception as e:
-            print(f"❌ Error guardando banned_ips en Supabase: {e}")
+    supabase_set("all", "banned_ips", data)
     
     with config_lock:
         tmp_path = BANNED_IPS_PATH + ".tmp"
@@ -676,13 +623,9 @@ def save_banned_ips(data: dict) -> None:
 
 def load_user_ips() -> dict:
     """Carga IPs de usuarios desde Supabase o archivo local"""
-    if supabase:
-        try:
-            result = supabase.table("user_ips").select("*").eq("guild_id", "all").execute()
-            if result.data and len(result.data) > 0:
-                return result.data[0].get("data", {})
-        except Exception as e:
-            print(f"❌ Error cargando user_ips de Supabase: {e}")
+    remote = supabase_get("all", "user_ips")
+    if remote is not None:
+        return remote
     
     with config_lock:
         if not os.path.exists(USER_IPS_PATH):
@@ -695,14 +638,7 @@ def load_user_ips() -> dict:
 
 def save_user_ips(data: dict) -> None:
     """Guarda IPs de usuarios en Supabase y local"""
-    if supabase:
-        try:
-            supabase.table("user_ips").upsert({
-                "guild_id": "all",
-                "data": data
-            }).execute()
-        except Exception as e:
-            print(f"❌ Error guardando user_ips en Supabase: {e}")
+    supabase_set("all", "user_ips", data)
     
     with config_lock:
         tmp_path = USER_IPS_PATH + ".tmp"
@@ -828,13 +764,9 @@ WARNS_PATH = "warns.json"
 
 def load_warns() -> dict:
     """Carga advertencias desde Supabase o archivo local"""
-    if supabase:
-        try:
-            result = supabase.table("warns").select("*").eq("guild_id", "all").execute()
-            if result.data and len(result.data) > 0:
-                return result.data[0].get("data", {})
-        except Exception as e:
-            print(f"❌ Error cargando warns de Supabase: {e}")
+    remote = supabase_get("all", "warns")
+    if remote is not None:
+        return remote
 
     with config_lock:
         if not os.path.exists(WARNS_PATH):
@@ -848,14 +780,7 @@ def load_warns() -> dict:
 
 def save_warns(data: dict) -> None:
     """Guarda advertencias en Supabase y local"""
-    if supabase:
-        try:
-            supabase.table("warns").upsert({
-                "guild_id": "all",
-                "data": data
-            }).execute()
-        except Exception as e:
-            print(f"❌ Error guardando warns en Supabase: {e}")
+    supabase_set("all", "warns", data)
 
     with config_lock:
         tmp_path = WARNS_PATH + ".tmp"
@@ -7147,13 +7072,9 @@ async def paneladmin(interaction: discord.Interaction):
 BLOCKED_CHANNELS_PATH = "blocked_channels.json"
 def load_blocked_channels() -> dict:
     """Carga canales bloqueados desde Supabase o archivo local"""
-    if supabase:
-        try:
-            result = supabase.table("blocked_channels").select("*").eq("guild_id", "all").execute()
-            if result.data and len(result.data) > 0:
-                return result.data[0].get("data", {})
-        except Exception as e:
-            print(f"❌ Error cargando blocked_channels de Supabase: {e}")
+    remote = supabase_get("all", "blocked_channels")
+    if remote is not None:
+        return remote
     
     if not os.path.exists(BLOCKED_CHANNELS_PATH):
         return {}
@@ -7165,14 +7086,7 @@ def load_blocked_channels() -> dict:
 
 def save_blocked_channels(data: dict) -> None:
     """Guarda canales bloqueados en Supabase y local"""
-    if supabase:
-        try:
-            supabase.table("blocked_channels").upsert({
-                "guild_id": "all",
-                "data": data
-            }).execute()
-        except Exception as e:
-            print(f"❌ Error guardando blocked_channels en Supabase: {e}")
+    supabase_set("all", "blocked_channels", data)
     
     with open(BLOCKED_CHANNELS_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -8866,7 +8780,7 @@ async def botinfo_cmd(interaction: discord.Interaction):
     embed.add_field(name="⚡ Comandos slash", value=str(len(bot.tree.get_commands())), inline=True)
     embed.add_field(name="🎵 FFmpeg", value="✅ Disponible" if FFMPEG_AVAILABLE else "❌ No encontrado", inline=True)
     embed.add_field(name="🔐 Davey (voz E2EE)", value="✅ Disponible" if DAVEY_AVAILABLE else "❌ No encontrado", inline=True)
-    embed.add_field(name="🗄️ Base de datos", value="✅ Supabase" if supabase else "📁 Archivos locales", inline=True)
+    embed.add_field(name="🗄️ Base de datos", value="✅ Supabase" if supabase and supabase.healthy else ("⚠️ Supabase no disponible" if supabase else "📁 Archivos locales"), inline=True)
     embed.add_field(name="🎶 Reproduciendo música en", value=f"{sum(1 for s in music_states.values() if s.is_playing())} servidor(es)", inline=True)
     embed.set_footer(text=BOT_FOOTER_TEXT)
     await interaction.response.send_message(embed=embed)
