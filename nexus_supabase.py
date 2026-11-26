@@ -2,6 +2,10 @@
 import os
 import re
 import threading
+import time
+import logging
+
+log = logging.getLogger(__name__)
 from dataclasses import dataclass
 from urllib.parse import urlsplit, quote
 
@@ -29,6 +33,34 @@ def secret_headers():
             'Accept': 'application/json', 'Prefer': 'return=representation'}
 
 
+def network_error(exc):
+    """Classify without exposing request headers, credentials or URLs."""
+    chain = [exc]; seen = set(); names = []; errnos = []
+    while chain:
+        item = chain.pop()
+        if id(item) in seen or not isinstance(item, BaseException):
+            continue
+        seen.add(id(item)); names.append(type(item).__name__)
+        number = getattr(item, 'errno', None)
+        if isinstance(number, int): errnos.append(number)
+        chain.extend(x for x in (item.__cause__, item.__context__, getattr(item, 'reason', None), *item.args) if isinstance(x, BaseException))
+    if isinstance(exc, requests.exceptions.SSLError) or any(n in ('SSLError', 'SSLCertVerificationError') for n in names):
+        return 'TLS/certificado rechazado', False
+    if isinstance(exc, requests.exceptions.ProxyError):
+        return 'proxy no disponible', True
+    if any(n in ('gaierror', 'NameResolutionError') for n in names):
+        return 'DNS: no se pudo resolver el dominio del proyecto', True
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return 'tiempo de espera al conectar', True
+    if isinstance(exc, requests.exceptions.ReadTimeout):
+        return 'tiempo de espera de respuesta HTTP', True
+    if isinstance(exc, requests.exceptions.Timeout):
+        return 'tiempo de espera agotado', True
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return 'conexión rechazada/interrumpida' + (f' (errno {errnos[0]})' if errnos else ''), True
+    return 'fallo de transporte (' + type(exc).__name__ + ')', False
+
+
 @dataclass
 class Result:
     data: list
@@ -48,15 +80,26 @@ class RestClient:
     def request(self, method, table, params, payload, prefer):
         headers = secret_headers()
         headers['Prefer'] = prefer
-        try:
-            response = requests.request(method, f'{SUPABASE_URL}/rest/v1/{quote(table, safe="")}',
-                                        headers=headers, params=params, json=payload,
-                                        timeout=(4, 10), allow_redirects=False)
-        except requests.exceptions.RequestException as exc:
-            self.healthy = False
-            if isinstance(exc, requests.exceptions.Timeout):
-                raise RuntimeError('Supabase: tiempo de espera agotado.') from None
-            raise RuntimeError('Supabase: error de red/DNS/TLS; comprueba URL, DNS y estado del proyecto.') from None
+        # Only retry reads and idempotent upserts for the APK table. Never
+        # replay arbitrary inserts or slow down the legacy synchronous paths.
+        retryable = table == 'nexusmusic_updates' and (method == 'GET' or (method == 'POST' and params.get('on_conflict') == 'guild_id' and 'merge-duplicates' in prefer))
+        attempts = 3 if retryable else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                response = requests.request(method, f'{SUPABASE_URL}/rest/v1/{quote(table, safe="")}',
+                                            headers=headers, params=params, json=payload,
+                                            timeout=(5, 15) if retryable else (4, 10), allow_redirects=False)
+            except requests.exceptions.RequestException as exc:
+                self.healthy = False
+                detail, transient = network_error(exc)
+                log.warning('Supabase %s %s: %s (intento %s/%s)', method, table, detail, attempt, attempts)
+                if transient and attempt < attempts:
+                    time.sleep(0.5 * 2 ** (attempt - 1)); continue
+                raise RuntimeError(f'Supabase: {detail} ({method} {table}; {attempt} intento(s)).') from None
+            if response.status_code in (429, 500, 502, 503, 504) and attempt < attempts:
+                log.warning('Supabase %s %s: HTTP %s (intento %s/%s)', method, table, response.status_code, attempt, attempts)
+                time.sleep(0.5 * 2 ** (attempt - 1)); continue
+            break
         if not 200 <= response.status_code < 300:
             self.healthy = False
             messages = {401: 'clave inválida o revocada', 403: 'permiso denegado',

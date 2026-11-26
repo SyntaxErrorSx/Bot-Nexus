@@ -11,6 +11,8 @@ import discord
 from discord import app_commands
 from nexus_release_core import manifest, releases, RELEASES_URL, MANIFEST_URL, REPO_URL, WEBS, manifest_release, manifest_action, mark_manifest
 from nexus_ui import banner, animated, set_style_context
+from nexus_supabase import SUPABASE_URL
+from urllib.parse import urlsplit
 
 log=logging.getLogger(__name__)
 NO_MENTIONS=discord.AllowedMentions.none()
@@ -29,7 +31,7 @@ def storage_error(exc):
         if status in ('401','403'):
             return f'Supabase HTTP {status}: revisa la clave sb_secret_ y los permisos de la tabla.'
         return f'Supabase HTTP {status}'+(f' [{code}]' if code else '')+'. Revisa el esquema y los permisos de nexusmusic_updates.'
-    if 'Supabase:' in text: return 'Supabase: error de conexión o tiempo de espera; revisa el estado del proyecto y la red.'
+    if text.startswith('Supabase:'): return text[:350]
     return 'Error de almacenamiento ('+type(exc).__name__+'). Revisa los logs del bot.'
 
 
@@ -86,18 +88,26 @@ class Feed:
         return None
 
 class Store:
-    def __init__(self,client): self.client=client
+    def __init__(self,client):
+        self.local_only = os.getenv('NEXUS_UPDATES_LOCAL_ONLY','0').strip() == '1'
+        self.client = None if self.local_only else client
+        self.invalid_cloud = not self.local_only and client is None and bool(os.getenv('SUPABASE_URL') or os.getenv('SUPABASE_SECRET_KEY'))
+    def check(self):
+        if self.invalid_cloud:
+            raise RuntimeError('Supabase: configuración incompleta o inválida; revisa SUPABASE_URL y SUPABASE_SECRET_KEY.')
     def read_local(self):
         if not LOCAL.exists(): return {}
         data=json.loads(LOCAL.read_text(encoding='utf-8'))
         if not isinstance(data,dict): raise ValueError('Archivo de avisos inválido')
         return data
     def load(self,gid):
+        self.check()
         if self.client:
             # Never silently use stale local data on a cloud error: could resend old alerts.
             return self.client.get_guild_data(TABLE,gid) or {}
         return self.read_local().get(str(gid),{})
     def save(self,gid,data):
+        self.check()
         if self.client:
             self.client.set_guild_data(TABLE,gid,data)
         else:
@@ -117,7 +127,9 @@ def link_view(*links):
 
 
 def setup_updates(bot,build_embed,config_group,client):
-    feed=Feed(); store=Store(client); lock=asyncio.Lock(); pending={}; states={}; channels={}
+    feed=Feed(); store=Store(client); locks={}; pending={}; states={}; channels={}
+    def guild_lock(gid): return locks.setdefault(gid,asyncio.Lock())
+    saved_label = "en Supabase" if store.client else "en archivo local (puede perderse al reiniciar Render)"
     def styled(i): set_style_context(bot,i.guild)
     def art(e,kind,channel=None):
         if channel is not None and hasattr(channel,'permissions_for') and getattr(channel,'guild',None) and channel.guild.me and not channel.permissions_for(channel.guild.me).attach_files: return {}
@@ -154,7 +166,7 @@ def setup_updates(bot,build_embed,config_group,client):
             return await i.followup.send('Necesitas gestionar ese canal y el bot debe poder enviar mensajes e insertar enlaces.',ephemeral=True)
         # Persist channel first; an unavailable GitHub feed must not undo it.
         try:
-            async with lock:
+            async with guild_lock(i.guild_id):
                 d=dict(await state(i.guild_id))
                 d.update(channel=canal.id if canal else None, announce_current=bool(canal and avisar_actual))
                 if canal:
@@ -165,34 +177,62 @@ def setup_updates(bot,build_embed,config_group,client):
         except Exception as exc:
             detail=storage_error(exc)
             log.warning('Configurar canal APK guild=%s: %s',i.guild_id,detail)
-            return await i.followup.send('No pude guardar el canal. '+detail,ephemeral=True)
+            return await i.followup.send('No pude confirmar el guardado del canal. '+detail+' Ejecuta `/config diagnostico-ac` para comprobar ambos servicios.',ephemeral=True)
         if not canal:
-            return await i.followup.send('Avisos APK desactivados. Configuración guardada.',ephemeral=True)
+            return await i.followup.send('Avisos APK desactivados. Configuración guardada'+(' en Supabase.' if store.client else ' localmente.'),ephemeral=True)
         try:
             r=manifest_release(await feed.get(MANIFEST_URL))
         except Exception as exc:
             detail=feed_error(exc)
             log.warning('Canal APK guardado; manifiesto: %s',detail)
-            return await i.followup.send('✅ Canal guardado. '+detail+' El monitor reintentará automáticamente; '+('publicará la versión actual cuando pueda.' if avisar_actual else 'tomará la primera versión disponible como referencia.'),ephemeral=True)
+            return await i.followup.send('✅ Canal guardado '+saved_label+'. '+detail+' El monitor reintentará automáticamente; '+('publicará la versión actual cuando pueda.' if avisar_actual else 'tomará la primera versión disponible como referencia.'),ephemeral=True)
         try:
-            async with lock:
+            async with guild_lock(i.guild_id):
                 d=await state(i.guild_id)
                 if d.get('channel')!=canal.id:
                     return await i.followup.send('La configuración cambió mientras consultaba GitHub.',ephemeral=True)
                 action=manifest_action(d,r)
                 if action=='announce' and not await announce(i.guild,r,d):
-                    return await i.followup.send('Canal guardado. Aviso pendiente: revisa permisos del bot.',ephemeral=True)
+                    return await i.followup.send('Canal guardado '+saved_label+'. Aviso pendiente: revisa permisos del bot.',ephemeral=True)
                 if action in ('announce','baseline'):
                     new=mark_manifest(d,r)
                     pending[i.guild_id]=new
                     await save(i.guild_id,new); pending.pop(i.guild_id,None)
         except discord.HTTPException as exc:
-            return await i.followup.send(f'Canal guardado. Discord rechazó el aviso (HTTP {exc.status}); revisa permisos. Se reintentará.',ephemeral=True)
+            return await i.followup.send(f'Canal guardado {saved_label}. Discord rechazó el aviso (HTTP {exc.status}); revisa permisos. Se reintentará.',ephemeral=True)
         except Exception as exc:
             log.warning('Finalizar aviso APK: %s',storage_error(exc))
-            return await i.followup.send('Canal guardado. La confirmación de versión quedó pendiente: '+storage_error(exc),ephemeral=True)
-        e=make('✦ Centro de actualizaciones',f'**Canal:** {canal.mention}\n> Se revisa el manifiesto oficial cada 5 minutos mientras el bot esté activo.\n**Versión de referencia:** `{r["version"]}`')
+            return await i.followup.send('Canal guardado '+saved_label+'. La confirmación de versión quedó pendiente: '+storage_error(exc),ephemeral=True)
+        e=make('✦ Centro de actualizaciones',f'**Canal:** {canal.mention}\n**Guardado:** {"Supabase" if store.client else "Archivo local (puede perderse al reiniciar Render)"}\n> Se revisa el manifiesto oficial cada 5 minutos mientras el bot esté activo.\n**Versión de referencia:** `{r["version"]}`')
         await i.followup.send(embed=e,ephemeral=True,**art(e,'update',i.channel),allowed_mentions=NO_MENTIONS)
+    @config_group.command(name='diagnostico-ac',description='Comprueba la conexión de los avisos APK con Supabase y GitHub')
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def diagnose(i:discord.Interaction):
+        await i.response.defer(ephemeral=True,thinking=True); styled(i)
+        lines=[]
+        host=urlsplit(SUPABASE_URL).hostname or 'sin configurar'
+        lines.append(f'**Proyecto:** `{host}`')
+        lines.append(f'**Almacenamiento:** {"Local (no persistente en Render sin disco)" if not store.client and not store.invalid_cloud else "Supabase"}')
+        async def check_table(table):
+            try:
+                await asyncio.to_thread(store.client.table(table).select('guild_id').limit(1).execute)
+                return f'**{table}:** lectura correcta'
+            except Exception as exc:
+                return f'**{table}:** {storage_error(exc)}'
+        async def check_feed():
+            try:
+                r=manifest_release(await feed.get(MANIFEST_URL))
+                return f'**GitHub:** disponible · `{r["version"]}`'
+            except Exception as exc:
+                return '**GitHub:** '+feed_error(exc)
+        if store.client:
+            lines.extend(await asyncio.gather(check_table('config'),check_table(TABLE),check_feed()))
+        else:
+            if store.invalid_cloud: lines.append('**Supabase:** variables incompletas o inválidas.')
+            lines.append(await check_feed())
+        e=make('Diagnóstico de actualizaciones','\n'.join(lines)+'\n\n*Prueba de lectura; no modifica registros ni muestra claves.*')
+        await i.followup.send(embed=e,ephemeral=True,allowed_mentions=NO_MENTIONS)
     @config_group.command(name='sticker-ac',description='Configura un sticker de este servidor para los avisos APK')
     @app_commands.guild_only()
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -202,7 +242,7 @@ def setup_updates(bot,build_embed,config_group,client):
         sticker=discord.utils.get(i.guild.stickers,id=int(id)) if id and id.isdigit() and len(id)<=22 else None
         if id and (not sticker or not getattr(sticker,'available',True)): return await i.followup.send('Selecciona un ID de sticker disponible de este servidor.',ephemeral=True)
         try:
-            async with lock:
+            async with guild_lock(i.guild_id):
                 d=dict(await state(i.guild_id)); d['sticker']=sticker.id if sticker else None; await save(i.guild_id,d)
             await i.followup.send('Sticker guardado para los avisos.' if sticker else 'Sticker desactivado.',ephemeral=True)
         except Exception: await i.followup.send('No pude guardar la configuración. Comprueba Supabase.',ephemeral=True)
@@ -256,7 +296,7 @@ def setup_updates(bot,build_embed,config_group,client):
                 # One shared GitHub fetch per interval, not one per guild.
                 for guild in list(bot.guilds):
                     try:
-                        async with lock:
+                        async with guild_lock(guild.id):
                             d=await state(guild.id)
                             if guild.id in pending:
                                 await save(guild.id,pending[guild.id]); pending.pop(guild.id,None)
@@ -269,7 +309,7 @@ def setup_updates(bot,build_embed,config_group,client):
                     for guild in list(bot.guilds):
                         if guild.id not in channels: continue
                         try:
-                            async with lock:
+                            async with guild_lock(guild.id):
                                 d=await state(guild.id)
                                 if guild.id in pending: continue
                                 action=manifest_action(d,r)
